@@ -1,0 +1,101 @@
+@import "tailwindcss";
+
+:root {
+  --bg: #0b0b0d;
+  --surface: #141418;
+  --surface-2: #1c1c22;
+  --border: #2a2a32;
+  --text: #f2f2f5;
+  --muted: #9b9ba6;
+  --accent: #4a9eff;
+  --danger: #ff5a5a;
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-border: var(--border);
+  --color-text: var(--text);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-danger: var(--danger);
+}
+
+html,
+body {
+  background: var(--bg);
+  color: var(--text);
+}
+
+body {
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
+    "Hiragino Sans", "Noto Sans JP", sans-serif;
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior-y: none;
+}
+
+input,
+select,
+textarea,
+button {
+  font: inherit;
+  color: inherit;
+}
+
+/* Evita el zoom automático de iOS al enfocar un campo. */
+input,
+select,
+textarea {
+  font-size: 16px;
+}
+
+.field {
+  width: 100%;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 0.625rem;
+  padding: 0.625rem 0.75rem;
+  outline: none;
+}
+.field:focus {
+  border-color: var(--accent);
+}
+
+.btn {
+  border-radius: 0.625rem;
+  padding: 0.625rem 0.9rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  cursor: pointer;
+}
+.btn:active {
+  opacity: 0.7;
+}
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #05121f;
+  font-weight: 600;
+}
+.btn-danger {
+  color: var(--danger);
+  border-color: #4a2020;
+  background: #241414;
+}
+
+@keyframes sheet-in {
+  from {
+    transform: translateY(16px);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+.sheet {
+  animation: sheet-in 0.18s ease-out;
+}
