@@ -7,6 +7,12 @@ export type Store = {
   sort_order: number;
 };
 
+export type Category = {
+  id: string;
+  name: string;
+  sort_order: number;
+};
+
 export type Item = {
   id: string;
   name: string;
@@ -34,5 +40,6 @@ export type Me = {
 export type Snapshot = {
   me: Me;
   stores: Store[];
+  categories: Category[];
   items: Item[];
 };

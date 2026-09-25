@@ -1,13 +1,13 @@
 import { requireMe } from "@/lib/auth";
 import { fail, handler, json, opt } from "@/lib/api";
 import { PHOTO_PREFIX, getDb, getEnv, now } from "@/lib/db";
-import { rememberPrice } from "@/lib/queries";
+import { ensureCategory, rememberPrice } from "@/lib/queries";
 
 export const dynamic = "force-dynamic";
 
 type Ctx = { params: Promise<{ id: string }> };
 
-const OPTIONAL_FIELDS = ["qty", "category", "note", "store_id", "photo_key"] as const;
+const OPTIONAL_FIELDS = ["qty", "note", "store_id", "photo_key"] as const;
 
 export const PATCH = handler(async (req: Request, ctx: Ctx) => {
   const me = await requireMe();
@@ -28,6 +28,12 @@ export const PATCH = handler(async (req: Request, ctx: Ctx) => {
       sets.push(`${f} = ?`);
       values.push(opt(body[f]));
     }
+  }
+  if ("category" in body) {
+    // Una categoría nueva escrita aquí también entra en la lista del hogar.
+    const c = opt(body.category);
+    sets.push("category = ?");
+    values.push(c ? (await ensureCategory(me.householdId, c)).name : null);
   }
   if ("price" in body) {
     const p = body.price;

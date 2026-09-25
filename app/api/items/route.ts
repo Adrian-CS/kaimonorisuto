@@ -1,7 +1,7 @@
 import { requireMe } from "@/lib/auth";
 import { fail, handler, json, opt } from "@/lib/api";
 import { getDb, newId, now } from "@/lib/db";
-import { recallPrice } from "@/lib/queries";
+import { ensureCategory, recallPrice } from "@/lib/queries";
 import { notifyHousehold } from "@/lib/notify";
 
 export const dynamic = "force-dynamic";
@@ -17,6 +17,10 @@ export const POST = handler(async (req: Request) => {
   const t = now();
   const id = newId();
   const storeId = opt(body.store_id);
+  const rawCategory = opt(body.category);
+  const category = rawCategory
+    ? (await ensureCategory(me.householdId, rawCategory)).name
+    : null;
 
   // Nuevos artículos arriba del todo.
   const min = await db
@@ -42,7 +46,7 @@ export const POST = handler(async (req: Request) => {
       me.householdId,
       name,
       opt(body.qty),
-      opt(body.category),
+      category,
       opt(body.note),
       storeId,
       opt(body.photo_key),

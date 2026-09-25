@@ -5,13 +5,28 @@ import ItemSheet, { type ItemPatch } from "./ItemSheet";
 import { useI18n } from "./I18n";
 import MenuSheet from "./MenuSheet";
 import { formatMoney, type Currency } from "@/lib/money";
-import type { Key } from "@/lib/i18n";
-import type { Item, Snapshot, Store } from "@/lib/types";
+import { errorText, type Key } from "@/lib/i18n";
+import type { Category, Item, Snapshot, Store } from "@/lib/types";
 
 type GroupBy = "store" | "category" | "none";
 
 const SIN_SUPER = "__sin_super__";
 const SIN_CATEGORIA = "__sin_categoria__";
+const NUEVA = "__nueva__";
+
+/** Intercambia una fila con su vecina y renumera el orden desde 1. */
+function swapOrder<T extends { id: string; sort_order: number }>(
+  list: T[],
+  id: string,
+  dir: -1 | 1,
+): T[] | null {
+  const idx = list.findIndex((s) => s.id === id);
+  const other = idx + dir;
+  if (idx < 0 || other < 0 || other >= list.length) return null;
+  const next = [...list];
+  [next[idx], next[other]] = [next[other], next[idx]];
+  return next.map((s, i) => ({ ...s, sort_order: i + 1 }));
+}
 
 /** Bandas verticales medidas al empezar a arrastrar. */
 type Band = {
@@ -26,6 +41,9 @@ export default function ListView({ initial }: { initial: Snapshot }) {
   const { t, lang } = useI18n();
   const [me, setMe] = useState(initial.me);
   const [stores, setStores] = useState<Store[]>(initial.stores);
+  const [categories, setCategories] = useState<Category[]>(
+    initial.categories ?? [],
+  );
   const [items, setItems] = useState<Item[]>(initial.items);
 
   const [groupBy, setGroupBy] = useState<GroupBy>("store");
@@ -35,6 +53,12 @@ export default function ListView({ initial }: { initial: Snapshot }) {
   const [notifyNext, setNotifyNext] = useState(false);
   const [editing, setEditing] = useState<Item | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+
+  // Modo selección: tocar marca filas en vez de tacharlas, y abajo aparece
+  // una barra para cambiarles la categoría o la tienda a todas de golpe.
+  const [selecting, setSelecting] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkMsg, setBulkMsg] = useState<string | null>(null);
 
   const dirty = useRef(0); // evita que el polling pise cambios recién hechos
   const headerRef = useRef<HTMLElement>(null);
@@ -98,6 +122,7 @@ export default function ListView({ initial }: { initial: Snapshot }) {
       if (Date.now() - dirty.current < 1500) return;
       setMe(data.me);
       setStores(data.stores);
+      setCategories(data.categories ?? []);
       setItems(data.items);
     } catch {
       /* sin conexión: se reintenta al siguiente tick */
@@ -346,12 +371,8 @@ export default function ListView({ initial }: { initial: Snapshot }) {
   }
 
   async function moveStore(id: string, dir: -1 | 1) {
-    const idx = stores.findIndex((s) => s.id === id);
-    const other = idx + dir;
-    if (idx < 0 || other < 0 || other >= stores.length) return;
-    const next = [...stores];
-    [next[idx], next[other]] = [next[other], next[idx]];
-    const renumbered = next.map((s, i) => ({ ...s, sort_order: i + 1 }));
+    const renumbered = swapOrder(stores, id, dir);
+    if (!renumbered) return;
     setStores(renumbered);
     await Promise.all(
       renumbered.map((s) =>
@@ -364,14 +385,139 @@ export default function ListView({ initial }: { initial: Snapshot }) {
     );
   }
 
+  /** Crea (o reutiliza) una categoría y devuelve su nombre tal cual se guardó. */
+  async function createCategory(name: string) {
+    const res = await fetch("/api/categories", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    if (!res.ok) return null;
+    const saved = (await res.json()) as { id: string; name: string };
+    setCategories((prev) =>
+      prev.some((c) => c.id === saved.id)
+        ? prev
+        : [...prev, { ...saved, sort_order: prev.length + 1 }],
+    );
+    return saved.name;
+  }
+
+  async function renameCategory(id: string, name: string) {
+    const old = categories.find((c) => c.id === id)?.name;
+    if (!old) return;
+    touch();
+    setCategories((prev) => prev.map((c) => (c.id === id ? { ...c, name } : c)));
+    setItems((prev) =>
+      prev.map((i) => (i.category === old ? { ...i, category: name } : i)),
+    );
+    const res = await fetch(`/api/categories/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    if (!res.ok) {
+      const data = (await res.json().catch(() => ({}))) as { error?: string };
+      window.alert(errorText(t, data.error));
+      dirty.current = 0;
+      void refresh();
+      return;
+    }
+    touch();
+  }
+
+  async function deleteCategory(id: string) {
+    const old = categories.find((c) => c.id === id)?.name;
+    touch();
+    setCategories((prev) => prev.filter((c) => c.id !== id));
+    setItems((prev) =>
+      prev.map((i) => (i.category === old ? { ...i, category: null } : i)),
+    );
+    await fetch(`/api/categories/${id}`, { method: "DELETE" });
+    touch();
+  }
+
+  async function moveCategory(id: string, dir: -1 | 1) {
+    const renumbered = swapOrder(categories, id, dir);
+    if (!renumbered) return;
+    setCategories(renumbered);
+    await Promise.all(
+      renumbered.map((c) =>
+        fetch(`/api/categories/${c.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sort_order: c.sort_order }),
+        }),
+      ),
+    );
+  }
+
+  /* ---------- selección y cambios en bloque ---------- */
+
+  function stopSelecting() {
+    setSelecting(false);
+    setSelected(new Set());
+    setBulkMsg(null);
+  }
+
+  function toggleSelected(ids: string[]) {
+    setBulkMsg(null);
+    setSelected((prev) => {
+      const next = new Set(prev);
+      // Si ya estaban todos, se quitan; si no, se añaden los que falten.
+      const all = ids.every((id) => next.has(id));
+      for (const id of ids) {
+        if (all) next.delete(id);
+        else next.add(id);
+      }
+      return next;
+    });
+  }
+
+  async function bulkPatch(patch: { category?: string | null; store_id?: string | null }) {
+    const ids = [...selected].filter((id) => !id.startsWith("temp-"));
+    if (!ids.length) return;
+    touch();
+    setItems((prev) =>
+      prev.map((i) =>
+        selected.has(i.id) ? { ...i, ...patch, updated_at: Date.now() } : i,
+      ),
+    );
+    setBulkMsg(t("select.applied", { n: ids.length }));
+    await fetch("/api/items/bulk", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids, ...patch }),
+    });
+    touch();
+  }
+
+  async function bulkCategory(value: string) {
+    if (value === NUEVA) {
+      const n = window.prompt(t("category.promptNew"));
+      if (!n?.trim()) return;
+      const saved = await createCategory(n.trim());
+      if (saved) await bulkPatch({ category: saved });
+      return;
+    }
+    await bulkPatch({ category: value === SIN_CATEGORIA ? null : value });
+  }
+
+  async function bulkStore(value: string) {
+    if (value === NUEVA) {
+      const n = window.prompt(t("store.promptNew"));
+      if (!n?.trim()) return;
+      const id = await createStore(n.trim());
+      if (id) await bulkPatch({ store_id: id });
+      return;
+    }
+    await bulkPatch({ store_id: value === SIN_SUPER ? null : value });
+  }
+
   /* ---------- derivados ---------- */
 
-  const categories = useMemo(
-    () =>
-      [...new Set(items.map((i) => i.category).filter(Boolean) as string[])].sort(
-        (a, b) => a.localeCompare(b, lang),
-      ),
-    [items, lang],
+  const categoryNames = useMemo(
+    () => categories.map((c) => c.name),
+    [categories],
   );
 
   const storeName = useCallback(
@@ -416,11 +562,14 @@ export default function ListView({ initial }: { initial: Snapshot }) {
       return [{ key: "__todo__", label: "", items: visible }];
 
     const buckets = new Map<string, Item[]>();
-    // Con la vista por tienda, los grupos vacíos también se pintan: así se
-    // puede arrastrar un artículo a una tienda que aún no tiene nada.
+    // Los grupos vacíos también se pintan: así se puede arrastrar un artículo
+    // a una tienda o categoría que aún no tiene nada.
     if (groupBy === "store") {
       for (const s of stores) buckets.set(s.name, []);
       buckets.set(SIN_SUPER, []);
+    } else {
+      for (const c of categoryNames) buckets.set(c, []);
+      buckets.set(SIN_CATEGORIA, []);
     }
 
     for (const it of visible) {
@@ -434,17 +583,16 @@ export default function ListView({ initial }: { initial: Snapshot }) {
     const order =
       groupBy === "store"
         ? [...stores.map((s) => s.name), SIN_SUPER]
-        : [...categories, SIN_CATEGORIA];
+        : [...categoryNames, SIN_CATEGORIA];
 
     return [...buckets.entries()]
-      .filter(([, list]) => groupBy === "store" || list.length > 0)
       .sort((a, b) => {
         const ia = order.indexOf(a[0]);
         const ib = order.indexOf(b[0]);
         return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib);
       })
       .map(([label, list]) => ({ key: label, label, items: list }));
-  }, [visible, groupBy, stores, categories, storeName]);
+  }, [visible, groupBy, stores, categoryNames, storeName]);
 
   const pending = items.filter((i) => !i.done).length;
   const doneCount = items.length - pending;
@@ -557,6 +705,12 @@ export default function ListView({ initial }: { initial: Snapshot }) {
 
     const newStoreId =
       groupBy === "store" ? storeIdByLabel(target.groupKey) : undefined;
+    const newCategory =
+      groupBy === "category"
+        ? target.groupKey === SIN_CATEGORIA
+          ? null
+          : target.groupKey
+        : undefined;
 
     const orderOf = new Map(without.map((x, i) => [x, i]));
     touch();
@@ -565,6 +719,7 @@ export default function ListView({ initial }: { initial: Snapshot }) {
         if (!orderOf.has(it.id)) return it;
         const next = { ...it, sort_order: orderOf.get(it.id)! };
         if (it.id === id && newStoreId !== undefined) next.store_id = newStoreId;
+        if (it.id === id && newCategory !== undefined) next.category = newCategory;
         return next;
       }),
     );
@@ -574,9 +729,14 @@ export default function ListView({ initial }: { initial: Snapshot }) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         moves: without.map((x, i) =>
-          x === id && newStoreId !== undefined
-            ? { id: x, sort_order: i, store_id: newStoreId }
-            : { id: x, sort_order: i },
+          x !== id
+            ? { id: x, sort_order: i }
+            : {
+                id: x,
+                sort_order: i,
+                ...(newStoreId !== undefined && { store_id: newStoreId }),
+                ...(newCategory !== undefined && { category: newCategory }),
+              },
         ),
       }),
     });
@@ -601,7 +761,7 @@ export default function ListView({ initial }: { initial: Snapshot }) {
 
   return (
     <main
-      className="mx-auto min-h-dvh w-full max-w-xl pb-24"
+      className={`mx-auto min-h-dvh w-full max-w-xl ${selecting ? "pb-48" : "pb-24"}`}
       onPointerMove={moveDrag}
       onPointerUp={endDrag}
       onPointerCancel={endDrag}
@@ -688,8 +848,20 @@ export default function ListView({ initial }: { initial: Snapshot }) {
           ))}
           <button
             type="button"
-            onClick={() => setShowDone((v) => !v)}
+            onClick={() => (selecting ? stopSelecting() : setSelecting(true))}
+            aria-pressed={selecting}
             className={`ml-auto shrink-0 rounded-full border px-3 py-1 ${
+              selecting
+                ? "border-accent bg-accent/15 text-accent"
+                : "border-border text-muted"
+            }`}
+          >
+            {selecting ? t("select.done") : t("select.start")}
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowDone((v) => !v)}
+            className={`shrink-0 rounded-full border px-3 py-1 ${
               showDone ? "border-border text-muted" : "border-accent text-accent"
             }`}
           >
@@ -725,7 +897,27 @@ export default function ListView({ initial }: { initial: Snapshot }) {
                   g.items.length === 0 ? "opacity-40" : ""
                 }`}
               >
-                <span className="truncate">{groupLabel(g.label)}</span>
+                {selecting && g.items.length > 0 ? (
+                  <button
+                    type="button"
+                    onClick={() => toggleSelected(g.items.map((i) => i.id))}
+                    aria-label={t("select.group", { name: groupLabel(g.label) })}
+                    className="flex min-w-0 items-center gap-2 uppercase"
+                  >
+                    <span
+                      className={`grid h-4 w-4 shrink-0 place-items-center rounded border text-[10px] ${
+                        g.items.every((i) => selected.has(i.id))
+                          ? "border-accent bg-accent text-[#05121f]"
+                          : "border-border"
+                      }`}
+                    >
+                      {g.items.every((i) => selected.has(i.id)) ? "✓" : ""}
+                    </span>
+                    <span className="truncate">{groupLabel(g.label)}</span>
+                  </button>
+                ) : (
+                  <span className="truncate">{groupLabel(g.label)}</span>
+                )}
                 {g.items.length > 0 && (
                   <span className="normal-case opacity-60">
                     {g.items.filter((i) => !i.done).length}/{g.items.length}
@@ -749,13 +941,17 @@ export default function ListView({ initial }: { initial: Snapshot }) {
                     ref={setRowRef(it.id)}
                     className={`border-b border-border/70 transition-colors ${
                       dragId === it.id ? "opacity-30" : ""
-                    } ${armed === it.id ? "bg-accent/10" : ""}`}
+                    } ${armed === it.id || (selecting && selected.has(it.id)) ? "bg-accent/10" : ""}`}
                   >
                     {dropIndicator(myIndex)}
                     <div className="flex items-center gap-2 px-4 py-2.5">
                       <button
                         type="button"
                         onClick={() => {
+                          if (selecting) {
+                            toggleSelected([it.id]);
+                            return;
+                          }
                           // Tras un gesto armado, el toggle ya lo hizo holdEnd.
                           if (swallowClick.current) {
                             swallowClick.current = false;
@@ -763,23 +959,40 @@ export default function ListView({ initial }: { initial: Snapshot }) {
                           }
                           patchItem(it.id, { done: it.done ? 0 : 1 });
                         }}
-                        onPointerDown={(e) => holdStart(e, it.id)}
+                        onPointerDown={(e) => !selecting && holdStart(e, it.id)}
                         onPointerMove={holdMove}
-                        onPointerUp={() => void holdEnd(it.id)}
+                        onPointerUp={() => !selecting && void holdEnd(it.id)}
                         onPointerCancel={cancelHold}
                         // Safari abre el menú de selección al mantener pulsado.
                         onContextMenu={(e) => e.preventDefault()}
+                        aria-label={
+                          selecting ? t("select.toggle", { name: it.name }) : undefined
+                        }
+                        aria-pressed={selecting ? selected.has(it.id) : undefined}
                         className="flex min-w-0 flex-1 touch-pan-y items-center gap-3 text-left select-none [-webkit-touch-callout:none]"
                       >
-                        <span
-                          className={`grid h-5 w-5 shrink-0 place-items-center rounded-full border text-[11px] ${
-                            it.done
-                              ? "border-accent bg-accent text-[#05121f]"
-                              : "border-border"
-                          }`}
-                        >
-                          {it.done ? "✓" : ""}
-                        </span>
+                        {selecting ? (
+                          // Casilla cuadrada para que no se confunda con «comprado».
+                          <span
+                            className={`grid h-5 w-5 shrink-0 place-items-center rounded border text-[11px] ${
+                              selected.has(it.id)
+                                ? "border-accent bg-accent text-[#05121f]"
+                                : "border-border"
+                            }`}
+                          >
+                            {selected.has(it.id) ? "✓" : ""}
+                          </span>
+                        ) : (
+                          <span
+                            className={`grid h-5 w-5 shrink-0 place-items-center rounded-full border text-[11px] ${
+                              it.done
+                                ? "border-accent bg-accent text-[#05121f]"
+                                : "border-border"
+                            }`}
+                          >
+                            {it.done ? "✓" : ""}
+                          </span>
+                        )}
 
                         {it.photo_key && (
                           // eslint-disable-next-line @next/next/no-img-element
@@ -834,24 +1047,28 @@ export default function ListView({ initial }: { initial: Snapshot }) {
                         )}
                       </button>
 
-                      <button
-                        type="button"
-                        onClick={() => setEditing(it)}
-                        aria-label={t("item.editAria", { name: it.name })}
-                        className="shrink-0 px-1.5 py-1 text-accent"
-                      >
-                        ✎
-                      </button>
+                      {!selecting && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => setEditing(it)}
+                            aria-label={t("item.editAria", { name: it.name })}
+                            className="shrink-0 px-1.5 py-1 text-accent"
+                          >
+                            ✎
+                          </button>
 
-                      <span
-                        role="button"
-                        tabIndex={0}
-                        aria-label={t("drag.handle", { name: it.name })}
-                        onPointerDown={(e) => startDrag(e, it.id)}
-                        className="shrink-0 cursor-grab touch-none px-1 py-1 text-lg leading-none text-muted select-none"
-                      >
-                        ⠿
-                      </span>
+                          <span
+                            role="button"
+                            tabIndex={0}
+                            aria-label={t("drag.handle", { name: it.name })}
+                            onPointerDown={(e) => startDrag(e, it.id)}
+                            className="shrink-0 cursor-grab touch-none px-1 py-1 text-lg leading-none text-muted select-none"
+                          >
+                            ⠿
+                          </span>
+                        </>
+                      )}
                     </div>
                   </li>
                 );
@@ -871,6 +1088,73 @@ export default function ListView({ initial }: { initial: Snapshot }) {
         </div>
       )}
 
+      {selecting && (
+        <div className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-bg/95 px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] backdrop-blur">
+          <div className="mx-auto flex w-full max-w-xl flex-col gap-2">
+            <div className="flex items-center gap-2 text-sm">
+              <span className="flex-1 truncate">
+                {bulkMsg ?? t("select.count", { n: selected.size })}
+              </span>
+              <button
+                type="button"
+                className="text-accent"
+                onClick={() => {
+                  setBulkMsg(null);
+                  setSelected(
+                    selected.size === visible.length
+                      ? new Set()
+                      : new Set(visible.map((i) => i.id)),
+                  );
+                }}
+              >
+                {selected.size === visible.length && visible.length > 0
+                  ? t("select.none")
+                  : t("select.all")}
+              </button>
+            </div>
+            <div className="flex gap-2">
+              {/* value fijo en "": el select vuelve a su rótulo tras cada cambio. */}
+              <select
+                className="field"
+                value=""
+                disabled={selected.size === 0}
+                aria-label={t("select.setCategory")}
+                onChange={(e) => void bulkCategory(e.target.value)}
+              >
+                <option value="" disabled>
+                  {t("select.setCategory")}
+                </option>
+                {categories.map((c) => (
+                  <option key={c.id} value={c.name}>
+                    {c.name}
+                  </option>
+                ))}
+                <option value={SIN_CATEGORIA}>{t("category.none")}</option>
+                <option value={NUEVA}>{t("category.new")}</option>
+              </select>
+              <select
+                className="field"
+                value=""
+                disabled={selected.size === 0}
+                aria-label={t("select.setStore")}
+                onChange={(e) => void bulkStore(e.target.value)}
+              >
+                <option value="" disabled>
+                  {t("select.setStore")}
+                </option>
+                {stores.map((st) => (
+                  <option key={st.id} value={st.id}>
+                    {st.name}
+                  </option>
+                ))}
+                <option value={SIN_SUPER}>{t("store.none")}</option>
+                <option value={NUEVA}>{t("store.new")}</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      )}
+
       {editing && (
         <ItemSheet
           item={items.find((i) => i.id === editing.id) ?? editing}
@@ -881,6 +1165,7 @@ export default function ListView({ initial }: { initial: Snapshot }) {
           onSave={(patch) => patchItem(editing.id, patch)}
           onDelete={() => deleteItem(editing.id)}
           onCreateStore={createStore}
+          onCreateCategory={createCategory}
           onNotify={() => notifyAbout(editing.id)}
         />
       )}
@@ -889,12 +1174,17 @@ export default function ListView({ initial }: { initial: Snapshot }) {
         <MenuSheet
           me={me}
           stores={stores}
+          categories={categories}
           doneCount={doneCount}
           onClose={() => setMenuOpen(false)}
           onCreateStore={createStore}
           onRenameStore={renameStore}
           onDeleteStore={deleteStore}
           onMoveStore={moveStore}
+          onCreateCategory={createCategory}
+          onRenameCategory={renameCategory}
+          onDeleteCategory={deleteCategory}
+          onMoveCategory={moveCategory}
           onClearDone={clearDone}
           onSetCurrency={setCurrency}
         />

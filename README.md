@@ -11,7 +11,12 @@ Todo lo demás es opcional: se puede usar escribiendo solo el nombre.
   el último precio de cada producto, así que solo se escribe una vez.
 - **Notificaciones que no molestan**: por defecto no avisa de nada; hay una
   campana junto al campo de añadir y solo avisa cuando la enciendes.
-- **Reordenar arrastrando**, y al soltar en otro grupo se cambia de tienda.
+- **Reordenar arrastrando**, y al soltar en otro grupo se cambia de tienda o
+  de categoría.
+- **Categorías como las tiendas**: se crean una vez en Ajustes (o con el «+» de
+  la ficha) y luego se eligen de una lista.
+- **Cambios en bloque**: «Seleccionar», marcas varios artículos y les pones la
+  misma categoría o el mismo supermercado de una vez.
 
 ## Stack
 
@@ -54,6 +59,8 @@ app/
     snapshot                 estado completo (lo que refresca el polling)
     items, items/[id]        CRUD de artículos
     stores, stores/[id]      supermercados
+    categories, categories/[id]  categorías (renombrar/borrar arrastra a sus artículos)
+    items/bulk               PATCH categoría/tienda de varios artículos a la vez
     items/order              PATCH nuevo orden tras arrastrar
     photos                   POST subir a R2
     photos/[...key]          GET servir desde R2 (comprobando el hogar)
@@ -80,6 +87,8 @@ scripts/push-selftest.mjs  prueba real del cifrado de Web Push
 migrations/
   0001_init.sql
   0002_precio_y_avisos.sql
+  0003_aviso_por_articulo.sql
+  0004_categorias.sql
 ```
 
 ## Precio orientativo
@@ -147,13 +156,33 @@ tomadas al empezar siguen siendo válidas y no hay saltos.
 Al soltar se renumera todo y se guarda en una sola llamada (`PATCH
 /api/items/order`, un `db.batch`). Con la vista agrupada por supermercado,
 soltar en otro grupo **le cambia la tienda** — es la forma rápida de clasificar
-sin abrir la ficha. Los grupos de tiendas vacías se pintan en gris justo para
-poder soltar ahí.
+sin abrir la ficha. Con la vista por categoría pasa lo mismo con la categoría.
+Los grupos vacíos se pintan en gris justo para poder soltar ahí.
+
+## Categorías y cambios en bloque
+
+Las categorías funcionan como los supermercados: una lista del hogar, con orden
+manual, que se gestiona en **Ajustes → Categorías** y se elige en la ficha del
+artículo (el «+» de al lado crea una nueva sin salir). El orden de esa lista es
+el orden de los grupos al agrupar por categoría.
+
+Los artículos guardan el **nombre** de la categoría en `items.category`, no un
+id, así que la migración `0004_categorias.sql` no toca datos: crea la tabla
+`categories` a partir de las categorías que ya estaban escritas (fusionando
+mayúsculas/minúsculas). Renombrar una categoría la renombra en sus artículos, y
+borrarla los deja sin categoría.
+
+Para no ir artículo por artículo, el botón **Seleccionar** de la barra de filtros
+cambia el toque de las filas: en vez de tachar, marca. Tocar el título de un
+grupo lo marca entero. Abajo aparece una barra con dos desplegables, «Poner
+categoría…» y «Poner súper…», que se aplican a todos los marcados en una sola
+llamada (`PATCH /api/items/bulk`). También se puede crear una categoría o tienda
+nueva desde ahí mismo. «Listo» sale del modo selección.
 
 ### Modelo de datos
 
 `households` (una casa = una lista, con su moneda) → `users` → `sessions` y
-`push_subscriptions`, y `stores` + `items` + `price_memory` colgando del hogar. Compartir la lista = registrarse con el **código de
+`push_subscriptions`, y `stores` + `categories` + `items` + `price_memory` colgando del hogar. Compartir la lista = registrarse con el **código de
 invitación** de la casa (Ajustes → Compartir).
 
 Todos los campos opcionales de un artículo (`qty`, `category`, `note`,

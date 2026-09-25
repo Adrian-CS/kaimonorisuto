@@ -11,7 +11,7 @@ import {
   parseMoney,
   type Currency,
 } from "@/lib/money";
-import type { Item, Store } from "@/lib/types";
+import type { Category, Item, Store } from "@/lib/types";
 
 export type ItemPatch = Partial<
   Pick<
@@ -29,16 +29,18 @@ export default function ItemSheet({
   onSave,
   onDelete,
   onCreateStore,
+  onCreateCategory,
   onNotify,
 }: {
   item: Item;
   stores: Store[];
-  categories: string[];
+  categories: Category[];
   currency: Currency;
   onClose: () => void;
   onSave: (patch: ItemPatch) => Promise<void>;
   onDelete: () => Promise<void>;
   onCreateStore: (name: string) => Promise<string | null>;
+  onCreateCategory: (name: string) => Promise<string | null>;
   onNotify: () => Promise<{ sent: number; reason?: string }>;
 }) {
   const { t, lang } = useI18n();
@@ -117,6 +119,13 @@ export default function ItemSheet({
     if (!n?.trim()) return;
     const id = await onCreateStore(n.trim());
     if (id) setStoreId(id);
+  }
+
+  async function addCategory() {
+    const n = window.prompt(t("category.promptNew"));
+    if (!n?.trim()) return;
+    const saved = await onCreateCategory(n.trim());
+    if (saved) setCategory(saved);
   }
 
   async function notify() {
@@ -273,19 +282,33 @@ export default function ItemSheet({
               placeholder={t("item.qty")}
                 onFocus={keepInView}
             />
-            <input
-              className="field"
-              list="categorias"
-              value={category}
-              onChange={(e) => setCategory(e.target.value)}
-              placeholder={t("item.category")}
-                onFocus={keepInView}
-            />
-            <datalist id="categorias">
-              {categories.map((c) => (
-                <option key={c} value={c} />
-              ))}
-            </datalist>
+            <div className="flex gap-2">
+              <select
+                className="field"
+                value={category}
+                onChange={(e) => setCategory(e.target.value)}
+                aria-label={t("item.category")}
+              >
+                <option value="">{t("category.none")}</option>
+                {categories.map((c) => (
+                  <option key={c.id} value={c.name}>
+                    {c.name}
+                  </option>
+                ))}
+                {/* Por si llega una que aún no está en la lista (polling a destiempo). */}
+                {category && !categories.some((c) => c.name === category) && (
+                  <option value={category}>{category}</option>
+                )}
+              </select>
+              <button
+                type="button"
+                className="btn shrink-0"
+                onClick={addCategory}
+                aria-label={t("category.promptNew")}
+              >
+                +
+              </button>
+            </div>
             <textarea
               className="field"
               rows={2}

@@ -35,6 +35,13 @@ const S = {
     add: "Añadir artículo…",
     settings: "Ajustes",
     storeName: "Nombre del supermercado",
+    categoryName: "Nombre de la categoría",
+    selectStart: "Seleccionar",
+    selectDone: "Listo",
+    selectToggle: (n) => `Seleccionar ${n}`,
+    setCategory: "Poner categoría…",
+    setStore: "Poner súper…",
+    categoryB: "Bebidas",
     addBtn: "Añadir",
     close: "Cerrar",
     delete: "Borrar",
@@ -82,6 +89,13 @@ const S = {
     add: "商品を追加…",
     settings: "設定",
     storeName: "お店の名前",
+    categoryName: "カテゴリの名前",
+    selectStart: "選択",
+    selectDone: "完了",
+    selectToggle: (n) => `${n}を選択`,
+    setCategory: "カテゴリを設定…",
+    setStore: "お店を設定…",
+    categoryB: "飲み物",
     addBtn: "追加",
     close: "閉じる",
     delete: "削除",
@@ -226,11 +240,16 @@ async function run(browser, lang, s) {
     await page.waitForSelector(".line-through");
   });
 
-  await step("crear supermercados", async () => {
+  await step("crear supermercados y categorías", async () => {
     await page.getByRole("button", { name: s.settings }).click();
     for (const name of [s.storeA, s.storeB]) {
       await page.getByPlaceholder(s.storeName).fill(name);
-      await page.getByRole("button", { name: s.addBtn, exact: true }).click();
+      await page.getByRole("button", { name: s.addBtn, exact: true }).first().click();
+      await page.waitForTimeout(400);
+    }
+    for (const name of [s.categoryValue, s.categoryB]) {
+      await page.getByPlaceholder(s.categoryName).fill(name);
+      await page.getByRole("button", { name: s.addBtn, exact: true }).nth(1).click();
       await page.waitForTimeout(400);
     }
     await page.screenshot({ path: `${SHOTS}/${lang}-02-ajustes.png` });
@@ -245,7 +264,9 @@ async function run(browser, lang, s) {
     await page.getByRole("button", { name: s.showExtraLabel }).click();
     await page.getByPlaceholder(s.price).fill("1234");
     await page.getByPlaceholder(s.qty).fill(s.qtyValue);
-    await page.getByPlaceholder(s.category, { exact: true }).fill(s.categoryValue);
+    await page
+      .getByLabel(s.category, { exact: true })
+      .selectOption({ label: s.categoryValue });
     await page.getByPlaceholder(s.note).fill(s.noteValue);
     await page.screenshot({ path: `${SHOTS}/${lang}-03-editor.png` });
     await page.getByRole("button", { name: s.save }).click();
@@ -365,6 +386,74 @@ async function run(browser, lang, s) {
     const selected = await page.locator("select").inputValue();
     if (!selected) throw new Error("sigue sin supermercado tras arrastrarlo");
     await page.getByRole("button", { name: s.close, exact: true }).click();
+  });
+
+  await step("cambiar categoría y tienda en bloque", async () => {
+    await page.getByRole("button", { name: s.selectStart, exact: true }).click();
+    for (const n of ["Fanta limón", "Sprite"])
+      await page.getByRole("button", { name: s.selectToggle(n), exact: true }).click();
+    await page.getByLabel(s.setCategory).selectOption({ label: s.categoryB });
+    await page.getByLabel(s.setStore).selectOption({ label: s.storeB });
+    await page.waitForTimeout(600);
+    await page.screenshot({ path: `${SHOTS}/${lang}-05-seleccion.png` });
+    await page.getByRole("button", { name: s.selectDone, exact: true }).click();
+
+    const snap = await (await page.request.get(`${BASE}/api/snapshot`)).json();
+    const storeB = snap.stores.find((x) => x.name === s.storeB)?.id;
+    for (const n of ["Fanta limón", "Sprite"]) {
+      const it = snap.items.find((x) => x.name === n);
+      if (it?.category !== s.categoryB || it?.store_id !== storeB)
+        throw new Error(`${n} no ha cambiado: ${JSON.stringify(it)}`);
+    }
+    // El resto no se toca.
+    const nutella = snap.items.find((x) => x.name === "Nutella");
+    if (nutella?.category !== s.categoryValue)
+      throw new Error("el cambio en bloque ha tocado otro artículo");
+  });
+
+  await step("renombrar una categoría la cambia en sus artículos", async () => {
+    const snap = await (await page.request.get(`${BASE}/api/snapshot`)).json();
+    const cat = snap.categories.find((c) => c.name === s.categoryB);
+    const renamed = s.categoryB + "!";
+    let res = await page.request.patch(`${BASE}/api/categories/${cat.id}`, {
+      data: { name: renamed },
+    });
+    if (!res.ok()) throw new Error(`rename ${res.status()}`);
+    let after = await (await page.request.get(`${BASE}/api/snapshot`)).json();
+    if (after.items.find((x) => x.name === "Sprite")?.category !== renamed)
+      throw new Error("Sprite no tiene el nombre nuevo");
+    // Chocar con otra categoría existente se rechaza.
+    res = await page.request.patch(`${BASE}/api/categories/${cat.id}`, {
+      data: { name: s.categoryValue.toUpperCase() },
+    });
+    if (res.status() !== 400) throw new Error(`esperaba 400, llega ${res.status()}`);
+    // Y se deja como estaba.
+    await page.request.patch(`${BASE}/api/categories/${cat.id}`, {
+      data: { name: s.categoryB },
+    });
+    after = await (await page.request.get(`${BASE}/api/snapshot`)).json();
+    if (after.items.find((x) => x.name === "Sprite")?.category !== s.categoryB)
+      throw new Error("no se ha deshecho el renombre");
+  });
+
+  await step("arrastrar a otra categoría", async () => {
+    await page.reload({ waitUntil: "networkidle" });
+    await page.getByRole("button", { name: s.groupCategory, exact: true }).click();
+    await page.waitForTimeout(300);
+    const handle = page.getByRole("button", { name: s.dragHandle("Sprite") });
+    const from = await handle.boundingBox();
+    const targetRow = page.locator("main ul li", { hasText: "Nutella" }).first();
+    const to = await targetRow.boundingBox();
+    if (!from || !to) throw new Error("no encuentro las filas");
+    await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(to.x + to.width / 2, to.y + 4, { steps: 12 });
+    await page.mouse.up();
+    await page.waitForTimeout(900);
+    const snap = await (await page.request.get(`${BASE}/api/snapshot`)).json();
+    if (snap.items.find((x) => x.name === "Sprite")?.category !== s.categoryValue)
+      throw new Error("Sprite no ha cambiado de categoría al arrastrarlo");
+    await page.getByRole("button", { name: s.groupStore, exact: true }).click();
   });
 
   await step("la hoja se queda visible con el teclado abierto", async () => {

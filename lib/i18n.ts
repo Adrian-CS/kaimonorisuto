@@ -113,6 +113,26 @@ const es = {
 
   "drag.handle": "Mover {name}",
 
+  "category.promptNew": "Nombre de la categoría",
+  "category.deleteConfirm":
+    "¿Borrar «{name}»? Sus artículos se quedarán sin categoría.",
+  "category.new": "+ Nueva categoría…",
+  "store.new": "+ Nuevo supermercado…",
+  "settings.categories": "Categorías",
+  "settings.categoriesHelp":
+    "Se crean una vez y luego se eligen en cada artículo. El orden de esta lista es el orden al agrupar por categoría.",
+
+  "select.start": "Seleccionar",
+  "select.done": "Listo",
+  "select.count": "{n} seleccionados",
+  "select.all": "Todos",
+  "select.none": "Ninguno",
+  "select.setCategory": "Poner categoría…",
+  "select.setStore": "Poner súper…",
+  "select.applied": "Cambiado en {n} artículos",
+  "select.toggle": "Seleccionar {name}",
+  "select.group": "Seleccionar todo {name}",
+
   "push.title": "🥕 Lista de la compra",
   "push.body": "{name} ha añadido {item}",
   "push.ping": "{name} te recuerda: {item}",
@@ -129,6 +149,8 @@ const es = {
   "error.missing_fields": "Faltan datos",
   "error.item_name_required": "El artículo necesita un nombre",
   "error.store_name_required": "El supermercado necesita un nombre",
+  "error.category_name_required": "La categoría necesita un nombre",
+  "error.category_exists": "Ya hay una categoría con ese nombre",
   "error.not_found": "No encontrado",
   "error.nothing_to_update": "Nada que actualizar",
   "error.unauthorized": "Se ha cerrado la sesión",
@@ -246,6 +268,26 @@ const ja: Record<Key, string> = {
 
   "drag.handle": "{name}を移動",
 
+  "category.promptNew": "カテゴリの名前",
+  "category.deleteConfirm":
+    "「{name}」を削除しますか？ このカテゴリの商品はカテゴリなしになります。",
+  "category.new": "＋ 新しいカテゴリ…",
+  "store.new": "＋ 新しいお店…",
+  "settings.categories": "カテゴリ",
+  "settings.categoriesHelp":
+    "一度作れば、商品ごとに選ぶだけです。ここの並び順が、カテゴリ別表示の並び順になります。",
+
+  "select.start": "選択",
+  "select.done": "完了",
+  "select.count": "{n}件を選択中",
+  "select.all": "すべて",
+  "select.none": "解除",
+  "select.setCategory": "カテゴリを設定…",
+  "select.setStore": "お店を設定…",
+  "select.applied": "{n}件を変更しました",
+  "select.toggle": "{name}を選択",
+  "select.group": "{name}をすべて選択",
+
   "push.title": "🥕 買い物リスト",
   "push.body": "{name}が「{item}」を追加しました",
   "push.ping": "{name}さんからのリマインド：「{item}」",
@@ -262,6 +304,8 @@ const ja: Record<Key, string> = {
   "error.missing_fields": "入力が足りません",
   "error.item_name_required": "商品名を入力してください",
   "error.store_name_required": "お店の名前を入力してください",
+  "error.category_name_required": "カテゴリの名前を入力してください",
+  "error.category_exists": "同じ名前のカテゴリがすでにあります",
   "error.not_found": "見つかりません",
   "error.nothing_to_update": "更新する項目がありません",
   "error.unauthorized": "ログインし直してください",

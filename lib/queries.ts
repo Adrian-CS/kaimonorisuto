@@ -1,6 +1,6 @@
-import { getDb, now } from "./db";
+import { getDb, newId, now } from "./db";
 import { nameKey } from "./money";
-import type { Item, Store } from "./types";
+import type { Category, Item, Store } from "./types";
 
 export async function listStores(householdId: string): Promise<Store[]> {
   const db = await getDb();
@@ -11,6 +11,49 @@ export async function listStores(householdId: string): Promise<Store[]> {
     .bind(householdId)
     .all<Store>();
   return results ?? [];
+}
+
+export async function listCategories(householdId: string): Promise<Category[]> {
+  const db = await getDb();
+  const { results } = await db
+    .prepare(
+      "SELECT id, name, sort_order FROM categories WHERE household_id = ? ORDER BY sort_order, name COLLATE NOCASE",
+    )
+    .bind(householdId)
+    .all<Category>();
+  return results ?? [];
+}
+
+/**
+ * Devuelve la categoría con ese nombre (sin distinguir mayúsculas), creándola
+ * al final de la lista si aún no existe. Devuelve el nombre tal y como está
+ * guardado, para que los artículos no acaben con «leche» y «Leche».
+ */
+export async function ensureCategory(
+  householdId: string,
+  name: string,
+): Promise<{ id: string; name: string }> {
+  const db = await getDb();
+  const dup = await db
+    .prepare(
+      "SELECT id, name FROM categories WHERE household_id = ? AND name = ? COLLATE NOCASE",
+    )
+    .bind(householdId, name)
+    .first<{ id: string; name: string }>();
+  if (dup) return dup;
+
+  const max = await db
+    .prepare("SELECT MAX(sort_order) AS m FROM categories WHERE household_id = ?")
+    .bind(householdId)
+    .first<{ m: number | null }>();
+  const id = newId();
+  await db
+    .prepare(
+      "INSERT INTO categories (id, household_id, name, sort_order, created_at) VALUES (?, ?, ?, ?, ?)",
+    )
+    .bind(id, householdId, name, (max?.m ?? 0) + 1, now())
+    .run();
+  return { id, name };
 }
 
 export async function listItems(householdId: string): Promise<Item[]> {
