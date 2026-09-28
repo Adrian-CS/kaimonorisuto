@@ -35,6 +35,8 @@ const S = {
     add: "Añadir artículo…",
     settings: "Ajustes",
     storeName: "Nombre del supermercado",
+    enlarge: "Ver foto en grande",
+    viewer: "Foto del artículo",
     categoryName: "Nombre de la categoría",
     selectStart: "Seleccionar",
     selectDone: "Listo",
@@ -89,6 +91,8 @@ const S = {
     add: "商品を追加…",
     settings: "設定",
     storeName: "お店の名前",
+    enlarge: "写真を大きく表示",
+    viewer: "商品の写真",
     categoryName: "カテゴリの名前",
     selectStart: "選択",
     selectDone: "完了",
@@ -259,7 +263,14 @@ async function run(browser, lang, s) {
   await step("editar artículo: tienda, foto y campos opcionales", async () => {
     await page.getByRole("button", { name: s.editItem("Nutella") }).click();
     await page.selectOption("select", { label: s.storeA });
-    await page.setInputFiles('input[type="file"]', MARCA);
+    // Dos campos: cámara (con capture) y álbum (sin él).
+    const camera = page.locator('[data-photo-input="camera"]');
+    const album = page.locator('[data-photo-input="album"]');
+    if ((await camera.getAttribute("capture")) !== "environment")
+      throw new Error("el botón de cámara no abre la cámara");
+    if ((await album.getAttribute("capture")) !== null)
+      throw new Error("el botón de álbum fuerza la cámara");
+    await album.setInputFiles(MARCA);
     await page.waitForSelector('img[src^="/api/photos/"]', { timeout: 20000 });
     await page.getByRole("button", { name: s.showExtraLabel }).click();
     await page.getByPlaceholder(s.price).fill("1234");
@@ -272,6 +283,46 @@ async function run(browser, lang, s) {
     await page.getByRole("button", { name: s.save }).click();
     await page.waitForTimeout(600);
     await page.waitForSelector(`text=${s.qtyValue}`);
+  });
+
+  await step("tocar la miniatura amplía la foto sin marcar el artículo", async () => {
+    const row = page.locator("main ul li", { hasText: "Nutella" }).first();
+    const wasDone = await row.locator(".line-through").count();
+    await row.getByRole("img", { name: s.enlarge }).click();
+    const viewer = page.getByRole("dialog", { name: s.viewer });
+    await viewer.waitFor();
+    // Doble toque amplía.
+    const img = viewer.locator("img");
+    const box = await img.boundingBox();
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    await page.waitForTimeout(300);
+    const tf = await img.evaluate((el) => el.style.transform);
+    if (!tf.includes("scale(2.5)")) throw new Error(`no amplía: ${tf}`);
+    await page.screenshot({ path: `${SHOTS}/${lang}-06-visor.png` });
+    await page.keyboard.press("Escape");
+    await viewer.waitFor({ state: "detached" });
+    if ((await row.locator(".line-through").count()) !== wasDone)
+      throw new Error("tocar la foto ha marcado el artículo");
+    // Un toque suelto, sin zoom, lo cierra.
+    await row.getByRole("img", { name: s.enlarge }).click();
+    await viewer.waitFor();
+    await viewer.locator("img").click();
+    await viewer.waitFor({ state: "detached", timeout: 2000 });
+  });
+
+  await step("en la ficha, tocar la foto la amplía y Escape no cierra la ficha", async () => {
+    await page.getByRole("button", { name: s.editItem("Nutella") }).click();
+    await page
+      .locator("[data-sheet-panel]")
+      .getByRole("button", { name: s.enlarge })
+      .click();
+    const viewer = page.getByRole("dialog", { name: s.viewer });
+    await viewer.waitFor();
+    await page.keyboard.press("Escape");
+    await viewer.waitFor({ state: "detached" });
+    await page.getByRole("button", { name: s.save }).waitFor();
+    await page.getByRole("button", { name: s.close, exact: true }).click();
   });
 
   await step("la foto se sirve desde R2", async () => {

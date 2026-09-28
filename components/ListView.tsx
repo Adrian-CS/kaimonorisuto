@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ItemSheet, { type ItemPatch } from "./ItemSheet";
 import { useI18n } from "./I18n";
 import MenuSheet from "./MenuSheet";
+import PhotoViewer from "./PhotoViewer";
 import { formatMoney, type Currency } from "@/lib/money";
 import { errorText, type Key } from "@/lib/i18n";
 import type { Category, Item, Snapshot, Store } from "@/lib/types";
@@ -53,6 +54,7 @@ export default function ListView({ initial }: { initial: Snapshot }) {
   const [notifyNext, setNotifyNext] = useState(false);
   const [editing, setEditing] = useState<Item | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [viewingPhoto, setViewingPhoto] = useState<string | null>(null);
 
   // Modo selección: tocar marca filas en vez de tacharlas, y abajo aparece
   // una barra para cambiarles la categoría o la tienda a todas de golpe.
@@ -995,11 +997,19 @@ export default function ListView({ initial }: { initial: Snapshot }) {
                         )}
 
                         {it.photo_key && (
+                          // Tocar la miniatura la amplía en vez de marcar el
+                          // artículo (salvo en modo selección).
                           // eslint-disable-next-line @next/next/no-img-element
                           <img
                             src={`/api/photos/${it.photo_key}`}
-                            alt=""
+                            alt={selecting ? "" : t("photo.enlarge")}
                             loading="lazy"
+                            onPointerDown={(e) => !selecting && e.stopPropagation()}
+                            onClick={(e) => {
+                              if (selecting) return;
+                              e.stopPropagation();
+                              setViewingPhoto(it.photo_key);
+                            }}
                             className={`h-9 w-9 shrink-0 rounded-md object-cover ${
                               it.done ? "opacity-40" : ""
                             }`}
@@ -1153,6 +1163,13 @@ export default function ListView({ initial }: { initial: Snapshot }) {
             </div>
           </div>
         </div>
+      )}
+
+      {viewingPhoto && (
+        <PhotoViewer
+          src={`/api/photos/${viewingPhoto}`}
+          onClose={() => setViewingPhoto(null)}
+        />
       )}
 
       {editing && (

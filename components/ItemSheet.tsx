@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import PhotoViewer from "./PhotoViewer";
 import Sheet from "./Sheet";
 import { useI18n } from "./I18n";
 import { errorText, type Key } from "@/lib/i18n";
@@ -56,7 +57,9 @@ export default function ItemSheet({
   const [error, setError] = useState<string | null>(null);
   const [notifying, setNotifying] = useState(false);
   const [notifyMsg, setNotifyMsg] = useState<Key | null>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
+  const cameraRef = useRef<HTMLInputElement>(null);
+  const albumRef = useRef<HTMLInputElement>(null);
+  const [viewing, setViewing] = useState(false);
 
   // Muestra los campos opcionales solo si ya tienen contenido: la lista
   // puede usarse como algo súper simple y crecer cuando haga falta.
@@ -106,6 +109,12 @@ export default function ItemSheet({
     } finally {
       setUploading(false);
     }
+  }
+
+  function onFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const f = e.target.files?.[0];
+    if (f) void pickPhoto(f);
+    e.target.value = "";
   }
 
   // iOS no siempre deja el campo enfocado a la vista al abrirse el teclado.
@@ -181,11 +190,14 @@ export default function ItemSheet({
           onFocus={keepInView}
         />
 
-        {/* Foto */}
+        {/* Foto: tocarla la amplía; hacerla o cambiarla va con los botones. */}
         <div className="flex items-center gap-3">
           <button
             type="button"
-            onClick={() => fileRef.current?.click()}
+            onClick={() =>
+              photoKey ? setViewing(true) : cameraRef.current?.click()
+            }
+            aria-label={photoKey ? t("photo.enlarge") : t("photo.camera")}
             className="relative h-20 w-20 shrink-0 overflow-hidden rounded-xl border border-border bg-surface-2"
           >
             {photoKey ? (
@@ -199,34 +211,67 @@ export default function ItemSheet({
               <span className="text-2xl">📷</span>
             )}
           </button>
-          <div className="text-sm text-muted">
+          <div className="flex min-w-0 flex-1 flex-col gap-1.5 text-sm text-muted">
             {uploading ? (
               t("item.uploading")
-            ) : photoKey ? (
-              <button
-                type="button"
-                className="text-danger"
-                onClick={() => setPhotoKey(null)}
-              >
-                {t("item.photoRemove")}
-              </button>
             ) : (
-              t("item.photoHelp")
+              <>
+                {!photoKey && <span className="text-xs">{t("item.photoHelp")}</span>}
+                <div className="flex flex-wrap gap-1.5">
+                  <button
+                    type="button"
+                    className="btn px-2.5 py-1 text-xs"
+                    onClick={() => cameraRef.current?.click()}
+                  >
+                    📷 {t("photo.camera")}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn px-2.5 py-1 text-xs"
+                    onClick={() => albumRef.current?.click()}
+                  >
+                    🖼️ {t("photo.album")}
+                  </button>
+                  {photoKey && (
+                    <button
+                      type="button"
+                      className="px-1 text-xs text-danger"
+                      onClick={() => setPhotoKey(null)}
+                    >
+                      {t("item.photoRemove")}
+                    </button>
+                  )}
+                </div>
+              </>
             )}
           </div>
+          {/* Con capture, el móvil va directo a la cámara; sin él, deja
+              elegir de la galería. */}
           <input
-            ref={fileRef}
+            ref={cameraRef}
             type="file"
             accept="image/*"
             capture="environment"
             className="hidden"
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) void pickPhoto(f);
-              e.target.value = "";
-            }}
+            data-photo-input="camera"
+            onChange={onFile}
+          />
+          <input
+            ref={albumRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            data-photo-input="album"
+            onChange={onFile}
           />
         </div>
+
+        {viewing && photoKey && (
+          <PhotoViewer
+            src={`/api/photos/${photoKey}`}
+            onClose={() => setViewing(false)}
+          />
+        )}
 
         {/* Supermercado */}
         <div className="flex gap-2">

@@ -1,11 +1,12 @@
 /**
  * Redimensiona y comprime una foto en el navegador antes de subirla.
- * Una foto de móvil de 4 MB acaba pesando ~100 KB, así que el plan gratis
- * de R2 da para miles de artículos.
+ * Una foto de móvil de 4 MB acaba pesando ~200 KB, así que el plan gratis
+ * de R2 da para miles de artículos. 1600 px da para ampliarla en el visor y
+ * leer la letra pequeña de la etiqueta.
  */
 export async function compressImage(
   file: File,
-  maxSide = 1000,
+  maxSide = 1600,
   quality = 0.75,
 ): Promise<File> {
   const bitmap = await createImageBitmap(file);

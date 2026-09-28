@@ -29,8 +29,8 @@ Todo lo demás es opcional: se puede usar escribiendo solo el nombre.
 | Cloudflare Workers | hosting |
 
 Sin Supabase y sin dependencias de pago. Las fotos se redimensionan y comprimen
-**en el navegador** antes de subirlas (~100 KB por foto), así que caben decenas
-de miles dentro del tramo gratuito.
+**en el navegador** antes de subirlas (1600 px, ~200 KB por foto), así que caben
+decenas de miles dentro del tramo gratuito.
 
 ## Idiomas
 
@@ -90,6 +90,16 @@ migrations/
   0003_aviso_por_articulo.sql
   0004_categorias.sql
 ```
+
+## Fotos
+
+En la ficha hay dos botones, **Cámara** y **Álbum**: el primero abre la cámara
+directamente (`capture="environment"`) y el segundo deja elegir una foto de la
+galería. Tocar la foto la abre a pantalla completa en `PhotoViewer.tsx`, igual
+que tocar la miniatura de una fila de la lista (que así no marca el artículo).
+En el visor se amplía pellizcando o con doble toque, se arrastra para moverse
+por la foto ampliada, y se cierra deslizando hacia abajo, tocando fuera, con ✕
+o con Escape.
 
 ## Precio orientativo
 
