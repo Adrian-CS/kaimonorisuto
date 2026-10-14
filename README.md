@@ -319,6 +319,18 @@ Settings → Domains & Routes → Add custom domain.
 - **`compatibility_date`** está en `2026-08-01`. Si tu otro proyecto usa otra, no
   pasa nada: es por Worker.
 
+## Despliegue automático
+
+`.github/workflows/deploy.yml` despliega solo cada vez que algo entra en `main`
+(y se puede lanzar a mano desde la pestaña **Actions → Deploy → Run workflow**):
+aplica las migraciones de D1 pendientes, comprueba tipos y lint, y hace el
+deploy. Necesita en **Settings → Secrets and variables → Actions** del repo:
+
+| Nombre | Tipo | Qué es |
+|---|---|---|
+| `CLOUDFLARE_API_TOKEN` | secret | token de Cloudflare con permiso de edición en Workers Scripts, D1 y R2 |
+| `CLOUDFLARE_ACCOUNT_ID` | secret o variable | id de la cuenta (sale en `npx wrangler whoami`) |
+
 ## Desarrollo local
 
 ```bash
