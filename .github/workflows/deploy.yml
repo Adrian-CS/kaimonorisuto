@@ -49,6 +49,12 @@ jobs:
           npx tsc --noEmit
           npm run lint
 
+      # A qué cuentas tiene acceso el token. GitHub tapa con *** el valor de
+      # CLOUDFLARE_ACCOUNT_ID, así que la cuenta configurada sale como ***:
+      # si no aparece ninguna fila con ***, el token no tiene acceso a ella.
+      - name: Cuenta de Cloudflare
+        run: npx wrangler whoami
+
       - name: Migraciones D1
         run: npm run db:remote
 
