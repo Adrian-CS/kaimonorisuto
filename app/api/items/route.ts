@@ -1,8 +1,9 @@
 import { requireMe } from "@/lib/auth";
-import { fail, handler, json, opt } from "@/lib/api";
+import { clientId, fail, handler, json, opt } from "@/lib/api";
 import { getDb, newId, now } from "@/lib/db";
 import { ensureCategory, recallPrice } from "@/lib/queries";
 import { notifyHousehold } from "@/lib/notify";
+import { sweepOrphanPhotos } from "@/lib/photos";
 
 export const dynamic = "force-dynamic";
 
@@ -15,7 +16,14 @@ export const POST = handler(async (req: Request) => {
 
   const db = await getDb();
   const t = now();
-  const id = newId();
+  // El cliente manda su propio id para poder crear artículos sin conexión.
+  // Si ya existe es un reintento de algo que sí llegó: no se duplica.
+  const id = clientId(body.id) ?? newId();
+  const existing = await db
+    .prepare("SELECT price FROM items WHERE id = ? AND household_id = ?")
+    .bind(id, me.householdId)
+    .first<{ price: number | null }>();
+  if (existing) return json({ id, price: existing.price });
   const storeId = opt(body.store_id);
   const rawCategory = opt(body.category);
   const category = rawCategory
@@ -70,7 +78,10 @@ export const POST = handler(async (req: Request) => {
   return json({ id, price });
 });
 
-/** Borra en bloque todos los artículos ya comprados. */
+/**
+ * Borra en bloque todos los artículos ya comprados, y de paso barre las fotos
+ * que se hayan quedado sin artículo.
+ */
 export const DELETE = handler(async () => {
   const me = await requireMe();
   const db = await getDb();
@@ -78,5 +89,6 @@ export const DELETE = handler(async () => {
     .prepare("DELETE FROM items WHERE household_id = ? AND done = 1")
     .bind(me.householdId)
     .run();
+  await sweepOrphanPhotos(me.householdId);
   return json({ ok: true });
 });

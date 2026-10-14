@@ -32,22 +32,30 @@ export default function ItemSheet({
   onCreateStore,
   onCreateCategory,
   onNotify,
+  offline,
 }: {
   item: Item;
   stores: Store[];
   categories: Category[];
   currency: Currency;
   onClose: () => void;
-  onSave: (patch: ItemPatch) => Promise<void>;
-  onDelete: () => Promise<void>;
-  onCreateStore: (name: string) => Promise<string | null>;
-  onCreateCategory: (name: string) => Promise<string | null>;
+  onSave: (patch: ItemPatch) => void;
+  onDelete: () => void;
+  onCreateStore: (name: string) => string | null;
+  onCreateCategory: (name: string) => string | null;
+  /** Sin conexión no se pueden subir fotos; todo lo demás sí. */
+  offline: boolean;
   onNotify: () => Promise<{ sent: number; reason?: string }>;
 }) {
   const { t, lang } = useI18n();
   const [name, setName] = useState(item.name);
   const [price, setPrice] = useState(moneyToInput(item.price, currency));
-  const [suggested, setSuggested] = useState<number | null>(null);
+  // Precio recordado para el nombre y la tienda con que se pidió: solo se
+  // enseña mientras sigan siendo esos y el campo de precio esté vacío.
+  const [suggestion, setSuggestion] = useState<{
+    query: string;
+    price: number | null;
+  } | null>(null);
   const [qty, setQty] = useState(item.qty ?? "");
   const [category, setCategory] = useState(item.category ?? "");
   const [note, setNote] = useState(item.note ?? "");
@@ -60,6 +68,7 @@ export default function ItemSheet({
   const cameraRef = useRef<HTMLInputElement>(null);
   const albumRef = useRef<HTMLInputElement>(null);
   const [viewing, setViewing] = useState(false);
+  const uploaded = useRef(new Set<string>());
 
   // Muestra los campos opcionales solo si ya tienen contenido: la lista
   // puede usarse como algo súper simple y crecer cuando haga falta.
@@ -68,24 +77,26 @@ export default function ItemSheet({
   );
 
   // Si no hay precio puesto, busca el que se recordó de este mismo producto.
+  const qs = new URLSearchParams({ name: name.trim() });
+  if (storeId) qs.set("store_id", storeId);
+  const query = qs.toString();
+  const wantSuggestion = !price.trim() && Boolean(name.trim());
+  const suggested =
+    wantSuggestion && suggestion?.query === query ? suggestion.price : null;
+
   useEffect(() => {
-    if (price.trim() || !name.trim()) {
-      setSuggested(null);
-      return;
-    }
+    if (!wantSuggestion) return;
     const timer = setTimeout(async () => {
-      const qs = new URLSearchParams({ name: name.trim() });
-      if (storeId) qs.set("store_id", storeId);
       try {
-        const res = await fetch(`/api/prices?${qs}`, { cache: "no-store" });
+        const res = await fetch(`/api/prices?${query}`, { cache: "no-store" });
         const data = (await res.json()) as { price: number | null };
-        setSuggested(data.price);
+        setSuggestion({ query, price: data.price });
       } catch {
-        setSuggested(null);
+        /* sin conexión: sin sugerencia */
       }
     }, 350);
     return () => clearTimeout(timer);
-  }, [name, storeId, price]);
+  }, [query, wantSuggestion]);
 
   async function pickPhoto(file: File) {
     setUploading(true);
@@ -103,6 +114,7 @@ export default function ItemSheet({
         setError(errorText(t, data.error ?? "upload_failed"));
         return;
       }
+      uploaded.current.add(data.key);
       setPhotoKey(data.key);
     } catch {
       setError(t("error.upload_failed"));
@@ -145,11 +157,13 @@ export default function ItemSheet({
       setNotifyMsg(
         sent > 0
           ? "item.notifySent"
-          : reason === "too_soon"
-            ? "item.notifyTooSoon"
-            : reason === "no_devices"
-              ? "item.notifyNoOthers"
-              : "item.notifyFailed",
+          : reason === "queued"
+            ? "item.notifyQueued"
+            : reason === "too_soon"
+              ? "item.notifyTooSoon"
+              : reason === "no_devices"
+                ? "item.notifyNoOthers"
+                : "item.notifyFailed",
       );
     } finally {
       setNotifying(false);
@@ -167,7 +181,7 @@ export default function ItemSheet({
       return;
     }
 
-    await onSave({
+    onSave({
       name: name.trim(),
       price: parsedPrice,
       qty: qty.trim() || null,
@@ -176,11 +190,22 @@ export default function ItemSheet({
       store_id: storeId || null,
       photo_key: photoKey,
     });
+    close(photoKey);
+  }
+
+  /**
+   * Cierra la ficha y borra de R2 las fotos subidas en ella que al final no
+   * se quedan (se cambiaron por otra o no se guardó). `kept` es la que queda.
+   */
+  function close(kept: string | null = item.photo_key) {
+    for (const key of uploaded.current)
+      if (key !== kept)
+        void fetch(`/api/photos/${key}`, { method: "DELETE" }).catch(() => {});
     onClose();
   }
 
   return (
-    <Sheet title={t("item.edit")} onClose={onClose}>
+    <Sheet title={t("item.edit")} onClose={() => close()}>
       <div className="flex flex-col gap-3">
         <input
           className="field"
@@ -195,7 +220,7 @@ export default function ItemSheet({
           <button
             type="button"
             onClick={() =>
-              photoKey ? setViewing(true) : cameraRef.current?.click()
+              photoKey ? setViewing(true) : !offline && cameraRef.current?.click()
             }
             aria-label={photoKey ? t("photo.enlarge") : t("photo.camera")}
             className="relative h-20 w-20 shrink-0 overflow-hidden rounded-xl border border-border bg-surface-2"
@@ -216,18 +241,24 @@ export default function ItemSheet({
               t("item.uploading")
             ) : (
               <>
-                {!photoKey && <span className="text-xs">{t("item.photoHelp")}</span>}
+                {offline ? (
+                  <span className="text-xs">{t("photo.offline")}</span>
+                ) : (
+                  !photoKey && <span className="text-xs">{t("item.photoHelp")}</span>
+                )}
                 <div className="flex flex-wrap gap-1.5">
                   <button
                     type="button"
-                    className="btn px-2.5 py-1 text-xs"
+                    className="btn px-2.5 py-1 text-xs disabled:opacity-40"
+                    disabled={offline}
                     onClick={() => cameraRef.current?.click()}
                   >
                     📷 {t("photo.camera")}
                   </button>
                   <button
                     type="button"
-                    className="btn px-2.5 py-1 text-xs"
+                    className="btn px-2.5 py-1 text-xs disabled:opacity-40"
+                    disabled={offline}
                     onClick={() => albumRef.current?.click()}
                   >
                     🖼️ {t("photo.album")}
@@ -403,8 +434,8 @@ export default function ItemSheet({
             className="btn btn-danger"
             onClick={async () => {
               if (window.confirm(t("item.deleteConfirm", { name: item.name }))) {
-                await onDelete();
-                onClose();
+                onDelete();
+                close(null);
               }
             }}
           >

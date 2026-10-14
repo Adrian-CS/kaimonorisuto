@@ -7,6 +7,15 @@ import MenuSheet from "./MenuSheet";
 import PhotoViewer from "./PhotoViewer";
 import { formatMoney, type Currency } from "@/lib/money";
 import { errorText, type Key } from "@/lib/i18n";
+import { sameName } from "@/lib/names";
+import {
+  Outbox,
+  forgetLocalData,
+  loadSnapshot,
+  saveSnapshot,
+  type Op,
+  type SendResult,
+} from "@/lib/outbox";
 import type { Category, Item, Snapshot, Store } from "@/lib/types";
 
 type GroupBy = "store" | "category" | "none";
@@ -27,6 +36,26 @@ function swapOrder<T extends { id: string; sort_order: number }>(
   const next = [...list];
   [next[idx], next[other]] = [next[other], next[idx]];
   return next.map((s, i) => ({ ...s, sort_order: i + 1 }));
+}
+
+/**
+ * Registra el service worker (notificaciones y uso sin conexión) y le pasa lo
+ * que esta página ya cargó, para que lo guarde: la primera vez la página se
+ * carga antes de que él la controle.
+ */
+async function registerServiceWorker() {
+  if (!("serviceWorker" in navigator)) return;
+  try {
+    await navigator.serviceWorker.register("/sw.js");
+    const reg = await navigator.serviceWorker.ready;
+    const urls = [
+      location.pathname,
+      ...performance.getEntriesByType("resource").map((e) => e.name),
+    ];
+    reg.active?.postMessage({ type: "precache", urls });
+  } catch {
+    /* sin service worker: la app funciona igual, solo que no sin conexión */
+  }
 }
 
 /** Bandas verticales medidas al empezar a arrastrar. */
@@ -95,10 +124,12 @@ export default function ListView({ initial }: { initial: Snapshot }) {
 
   useEffect(() => {
     try {
+      /* eslint-disable react-hooks/set-state-in-effect -- localStorage solo existe tras montar */
       const g = localStorage.getItem("groupBy") as GroupBy | null;
       if (g) setGroupBy(g);
       const d = localStorage.getItem("showDone");
       if (d !== null) setShowDone(d === "1");
+      /* eslint-enable react-hooks/set-state-in-effect */
     } catch {
       /* modo privado: da igual */
     }
@@ -113,27 +144,100 @@ export default function ListView({ initial }: { initial: Snapshot }) {
     }
   }, [groupBy, showDone]);
 
-  /* ---------- sincronización ---------- */
+  /* ---------- sincronización y uso sin conexión ---------- */
+
+  // Todos los cambios pasan por la cola (lib/outbox.ts): se guardan en el
+  // móvil y se mandan en cuanto hay red. Se crea al montar porque usa
+  // localStorage, que en el servidor no existe.
+  const outbox = useRef<Outbox | null>(null);
+  const [pendingOps, setPendingOps] = useState(0);
+  const [netDown, setNetDown] = useState(false);
+  const householdId = initial.me.householdId;
+
+  const send = useCallback(
+    (op: Omit<Op, "key">): Promise<SendResult> =>
+      outbox.current?.send(op) ?? Promise.resolve({ status: "queued" }),
+    [],
+  );
+  const json = (method: Op["method"], url: string, body?: unknown) =>
+    send({ method, url, body });
 
   const refresh = useCallback(async () => {
+    // Con cambios por mandar, lo del servidor está desfasado respecto a la
+    // pantalla: primero se vacía la cola y luego se refresca.
+    if (outbox.current?.size) return;
     if (Date.now() - dirty.current < 1500) return;
     try {
       const res = await fetch("/api/snapshot", { cache: "no-store" });
+      setNetDown(false);
       if (!res.ok) return;
       const data = (await res.json()) as Snapshot;
-      if (Date.now() - dirty.current < 1500) return;
+      if (outbox.current?.size || Date.now() - dirty.current < 1500) return;
       setMe(data.me);
       setStores(data.stores);
       setCategories(data.categories ?? []);
       setItems(data.items);
     } catch {
-      /* sin conexión: se reintenta al siguiente tick */
+      setNetDown(true); // sin conexión: se reintenta al siguiente tick
     }
   }, []);
 
   useEffect(() => {
+    const ob = new Outbox(householdId);
+    outbox.current = ob;
+
+    // Si la copia guardada en el móvil es más reciente que la página (que
+    // puede venir de la caché del service worker al abrir sin conexión), o
+    // quedan cambios sin mandar, manda la copia local.
+    const cached = loadSnapshot<Snapshot>(householdId);
+    if (cached && (ob.size > 0 || cached.at > (initial.servedAt ?? 0))) {
+      /* eslint-disable react-hooks/set-state-in-effect -- localStorage solo existe tras montar */
+      setMe(cached.data.me);
+      setStores(cached.data.stores);
+      setCategories(cached.data.categories ?? []);
+      setItems(cached.data.items);
+      /* eslint-enable react-hooks/set-state-in-effect */
+    }
+
+    let wasPending = ob.size > 0;
+    const sync = () => {
+      setPendingOps(ob.size);
+      setNetDown(ob.offline);
+      // Al vaciarse la cola, se trae lo que haya cambiado la otra persona.
+      if (wasPending && ob.size === 0) {
+        dirty.current = 0;
+        void refresh();
+      }
+      wasPending = ob.size > 0;
+    };
+    const unsubscribe = ob.subscribe(sync);
+    sync();
+    void ob.flush();
+
+    const online = () => void ob.flush().then(refresh);
+    const offline = () => setNetDown(true);
+    window.addEventListener("online", online);
+    window.addEventListener("offline", offline);
+
+    void registerServiceWorker();
+
+    return () => {
+      unsubscribe();
+      window.removeEventListener("online", online);
+      window.removeEventListener("offline", offline);
+    };
+  }, [householdId, initial.servedAt, refresh]);
+
+  // Copia local de la lista, para abrirla sin conexión.
+  useEffect(() => {
+    saveSnapshot<Snapshot>(householdId, { me, stores, categories, items });
+  }, [householdId, me, stores, categories, items]);
+
+  useEffect(() => {
     const tick = () => {
-      if (document.visibilityState === "visible" && !dragId) void refresh();
+      if (document.visibilityState !== "visible" || dragId) return;
+      if (outbox.current?.size) void outbox.current.flush();
+      else void refresh();
     };
     const id = setInterval(tick, 8000);
     document.addEventListener("visibilitychange", tick);
@@ -145,13 +249,18 @@ export default function ListView({ initial }: { initial: Snapshot }) {
     };
   }, [refresh, dragId]);
 
+  const offline = netDown;
+
   /* ---------- acciones ---------- */
 
-  const touch = () => {
+  // Las acciones de abajo solo se llaman desde eventos, nunca al pintar; el
+  // compilador de React no lo puede saber y se queja de Date.now().
+  /* eslint-disable react-hooks/purity */
+  function touch() {
     dirty.current = Date.now();
-  };
+  }
 
-  async function addItem(e: React.FormEvent) {
+  function addItem(e: React.FormEvent) {
     e.preventDefault();
     const name = draft.trim();
     if (!name) return;
@@ -160,8 +269,11 @@ export default function ListView({ initial }: { initial: Snapshot }) {
     setNotifyNext(false); // la campana es de un solo uso
     touch();
 
-    const temp: Item = {
-      id: `temp-${crypto.randomUUID()}`,
+    // El id se genera aquí para poder añadir sin conexión.
+    const id = crypto.randomUUID();
+    const t0 = Date.now();
+    const item: Item = {
+      id,
       name,
       qty: null,
       category: null,
@@ -171,56 +283,39 @@ export default function ListView({ initial }: { initial: Snapshot }) {
       price: null,
       done: 0,
       sort_order: Math.min(0, ...items.map((i) => i.sort_order)) - 1,
-      created_at: Date.now(),
-      updated_at: Date.now(),
+      created_at: t0,
+      updated_at: t0,
     };
-    setItems((prev) => [temp, ...prev]);
+    setItems((prev) => [item, ...prev]);
 
-    const res = await fetch("/api/items", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, notify }),
+    void json("POST", "/api/items", { id, name, notify }).then((r) => {
+      if (r.status !== "sent") return;
+      touch();
+      setItems((prev) =>
+        r.ok
+          ? prev.map((i) =>
+              i.id === id ? { ...i, price: (r.data.price as number | null) ?? null } : i,
+            )
+          : prev.filter((i) => i.id !== id),
+      );
     });
-    const data = (await res.json().catch(() => ({}))) as {
-      id?: string;
-      price?: number | null;
-    };
-    touch();
-    setItems((prev) =>
-      data.id
-        ? prev.map((i) =>
-            i.id === temp.id
-              ? { ...i, id: data.id!, price: data.price ?? null }
-              : i,
-          )
-        : prev.filter((i) => i.id !== temp.id),
-    );
   }
 
   /**
-   * Avisa a los demás de un artículo que ya está en la lista. Con `toggle`,
-   * además lo marca o desmarca, y el aviso describe el estado resultante.
+   * Avisa a los demás de un artículo que ya está en la lista. Con `done`,
+   * además lo deja en ese estado, y el aviso describe el resultado.
    */
-  async function notifyAbout(id: string, toggle = false) {
-    try {
-      const res = await fetch(`/api/items/${id}/notify`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ toggle }),
-      });
-      const data = (await res.json().catch(() => ({}))) as {
-        sent?: number;
-        reason?: string;
-        done?: number;
-      };
-      return {
-        sent: res.ok ? (data.sent ?? 0) : 0,
-        reason: res.ok ? data.reason : "failed",
-        done: data.done,
-      };
-    } catch {
-      return { sent: 0, reason: "failed", done: undefined };
-    }
+  async function notifyAbout(id: string, done?: number) {
+    const r = await json(
+      "POST",
+      `/api/items/${id}/notify`,
+      done === undefined ? {} : { done },
+    );
+    if (r.status === "queued") return { sent: 0, reason: "queued" };
+    return {
+      sent: r.ok ? Number(r.data.sent ?? 0) : 0,
+      reason: r.ok ? (r.data.reason as string | undefined) : "failed",
+    };
   }
 
   /* ---------- mantener pulsado para marcar y avisar ---------- */
@@ -274,23 +369,23 @@ export default function ListView({ initial }: { initial: Snapshot }) {
     if (!wasArmed) return;
 
     swallowClick.current = true;
-    // El estado cambia igual; el aviso es el extra.
-    setItems((prev) =>
-      prev.map((i) => (i.id === id ? { ...i, done: i.done ? 0 : 1 } : i)),
-    );
+    // El estado cambia igual; el aviso es el extra. Se manda el estado final
+    // (no «alternar») para que reintentarlo sin conexión no lo deshaga.
+    const done = items.find((i) => i.id === id)?.done ? 0 : 1;
+    setItems((prev) => prev.map((i) => (i.id === id ? { ...i, done } : i)));
     touch();
 
-    const { sent, reason, done } = await notifyAbout(id, true);
+    const { sent, reason } = await notifyAbout(id, done);
     touch();
-    if (typeof done === "number")
-      setItems((prev) => prev.map((i) => (i.id === id ? { ...i, done } : i)));
 
     setFlash({
       id,
       key:
         sent > 0
           ? "list.notified"
-          : reason === "too_soon"
+          : reason === "queued"
+            ? "list.notifyQueued"
+            : reason === "too_soon"
             ? "item.notifyTooSoon"
             : reason === "no_devices"
               ? "item.notifyNoOthers"
@@ -299,127 +394,127 @@ export default function ListView({ initial }: { initial: Snapshot }) {
     setTimeout(() => setFlash((f) => (f?.id === id ? null : f)), 3000);
   }
 
-  async function patchItem(id: string, patch: ItemPatch | { done: number }) {
+  function patchItem(id: string, patch: ItemPatch | { done: number }) {
     touch();
     setItems((prev) =>
       prev.map((i) => (i.id === id ? { ...i, ...patch, updated_at: Date.now() } : i)),
     );
-    await fetch(`/api/items/${id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(patch),
-    });
-    touch();
+    void json("PATCH", `/api/items/${id}`, patch).then(touch);
   }
 
-  async function deleteItem(id: string) {
+  function deleteItem(id: string) {
     touch();
     setItems((prev) => prev.filter((i) => i.id !== id));
-    await fetch(`/api/items/${id}`, { method: "DELETE" });
-    touch();
+    void json("DELETE", `/api/items/${id}`).then(touch);
   }
 
-  async function clearDone() {
+  function clearDone() {
     touch();
     setItems((prev) => prev.filter((i) => !i.done));
-    await fetch("/api/items", { method: "DELETE" });
-    touch();
+    void json("DELETE", "/api/items").then(touch);
   }
 
-  async function setCurrency(currency: Currency) {
+  function setCurrency(currency: Currency) {
     touch();
     setMe((prev) => ({ ...prev, currency }));
-    await fetch("/api/household", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ currency }),
-    });
-    touch();
+    void json("PATCH", "/api/household", { currency }).then(touch);
   }
 
-  async function createStore(name: string) {
-    const res = await fetch("/api/stores", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name }),
+  /** Crea una tienda (o reutiliza la que ya se llame así) y devuelve su id. */
+  function createStore(name: string): string {
+    const dup = stores.find((s) => sameName(s.name, name));
+    if (dup) return dup.id;
+    const id = crypto.randomUUID();
+    touch();
+    setStores((prev) => [
+      ...prev,
+      { id, name, color: null, sort_order: Math.max(0, ...prev.map((s) => s.sort_order)) + 1 },
+    ]);
+    void json("POST", "/api/stores", { id, name }).then((r) => {
+      // Ya había una con ese nombre en el servidor: se usa esa.
+      const real = r.status === "sent" ? (r.data.id as string | undefined) : undefined;
+      if (!real || real === id) return;
+      touch();
+      setStores((prev) => prev.filter((s) => s.id !== id));
+      setItems((prev) =>
+        prev.map((i) => (i.store_id === id ? { ...i, store_id: real } : i)),
+      );
     });
-    if (!res.ok) return null;
-    const { id } = (await res.json()) as { id: string };
-    setStores((prev) =>
-      prev.some((s) => s.id === id)
-        ? prev
-        : [...prev, { id, name, color: null, sort_order: prev.length + 1 }],
-    );
     return id;
   }
 
-  async function renameStore(id: string, name: string) {
+  function renameStore(id: string, name: string) {
+    touch();
     setStores((prev) => prev.map((s) => (s.id === id ? { ...s, name } : s)));
-    await fetch(`/api/stores/${id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name }),
-    });
+    void json("PATCH", `/api/stores/${id}`, { name }).then(touch);
   }
 
-  async function deleteStore(id: string) {
+  function deleteStore(id: string) {
     touch();
     setStores((prev) => prev.filter((s) => s.id !== id));
     setItems((prev) =>
       prev.map((i) => (i.store_id === id ? { ...i, store_id: null } : i)),
     );
-    await fetch(`/api/stores/${id}`, { method: "DELETE" });
-    touch();
+    void json("DELETE", `/api/stores/${id}`).then(touch);
   }
 
-  async function moveStore(id: string, dir: -1 | 1) {
+  function moveStore(id: string, dir: -1 | 1) {
     const renumbered = swapOrder(stores, id, dir);
     if (!renumbered) return;
+    touch();
     setStores(renumbered);
-    await Promise.all(
-      renumbered.map((s) =>
-        fetch(`/api/stores/${s.id}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ sort_order: s.sort_order }),
-        }),
-      ),
-    );
+    for (const s of renumbered)
+      void json("PATCH", `/api/stores/${s.id}`, { sort_order: s.sort_order });
   }
 
-  /** Crea (o reutiliza) una categoría y devuelve su nombre tal cual se guardó. */
-  async function createCategory(name: string) {
-    const res = await fetch("/api/categories", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name }),
+  /** Crea (o reutiliza) una categoría y devuelve su nombre tal cual queda. */
+  function createCategory(name: string): string {
+    const dup = categories.find((c) => sameName(c.name, name));
+    if (dup) return dup.name;
+    const id = crypto.randomUUID();
+    touch();
+    setCategories((prev) => [
+      ...prev,
+      { id, name, sort_order: Math.max(0, ...prev.map((c) => c.sort_order)) + 1 },
+    ]);
+    void json("POST", "/api/categories", { id, name }).then((r) => {
+      // Ya existía en el servidor con otro id o con otras mayúsculas.
+      if (r.status !== "sent" || !r.ok) return;
+      const real = r.data as { id: string; name: string };
+      if (real.id === id && real.name === name) return;
+      touch();
+      setCategories((prev) => prev.filter((c) => c.id !== id));
+      setItems((prev) =>
+        prev.map((i) => (i.category === name ? { ...i, category: real.name } : i)),
+      );
     });
-    if (!res.ok) return null;
-    const saved = (await res.json()) as { id: string; name: string };
-    setCategories((prev) =>
-      prev.some((c) => c.id === saved.id)
-        ? prev
-        : [...prev, { ...saved, sort_order: prev.length + 1 }],
-    );
-    return saved.name;
+    return name;
   }
 
   async function renameCategory(id: string, name: string) {
     const old = categories.find((c) => c.id === id)?.name;
     if (!old) return;
+    // Renombrarla como otra que ya existe las junta, previa confirmación.
+    const clash = categories.find((c) => c.id !== id && sameName(c.name, name));
+    if (clash && !window.confirm(t("category.mergeConfirm", { name: clash.name })))
+      return;
+    const target = clash?.name ?? name;
+
     touch();
-    setCategories((prev) => prev.map((c) => (c.id === id ? { ...c, name } : c)));
-    setItems((prev) =>
-      prev.map((i) => (i.category === old ? { ...i, category: name } : i)),
+    setCategories((prev) =>
+      clash
+        ? prev.filter((c) => c.id !== id)
+        : prev.map((c) => (c.id === id ? { ...c, name } : c)),
     );
-    const res = await fetch(`/api/categories/${id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name }),
+    setItems((prev) =>
+      prev.map((i) => (i.category === old ? { ...i, category: target } : i)),
+    );
+    const r = await json("PATCH", `/api/categories/${id}`, {
+      name,
+      ...(clash && { merge: true }),
     });
-    if (!res.ok) {
-      const data = (await res.json().catch(() => ({}))) as { error?: string };
-      window.alert(errorText(t, data.error));
+    if (r.status === "sent" && !r.ok) {
+      window.alert(errorText(t, r.data.error));
       dirty.current = 0;
       void refresh();
       return;
@@ -427,31 +522,40 @@ export default function ListView({ initial }: { initial: Snapshot }) {
     touch();
   }
 
-  async function deleteCategory(id: string) {
+  function deleteCategory(id: string) {
     const old = categories.find((c) => c.id === id)?.name;
     touch();
     setCategories((prev) => prev.filter((c) => c.id !== id));
     setItems((prev) =>
       prev.map((i) => (i.category === old ? { ...i, category: null } : i)),
     );
-    await fetch(`/api/categories/${id}`, { method: "DELETE" });
-    touch();
+    void json("DELETE", `/api/categories/${id}`).then(touch);
   }
 
-  async function moveCategory(id: string, dir: -1 | 1) {
+  function moveCategory(id: string, dir: -1 | 1) {
     const renumbered = swapOrder(categories, id, dir);
     if (!renumbered) return;
+    touch();
     setCategories(renumbered);
-    await Promise.all(
-      renumbered.map((c) =>
-        fetch(`/api/categories/${c.id}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ sort_order: c.sort_order }),
-        }),
-      ),
-    );
+    for (const c of renumbered)
+      void json("PATCH", `/api/categories/${c.id}`, { sort_order: c.sort_order });
   }
+
+  async function logout() {
+    if (
+      pendingOps > 0 &&
+      !window.confirm(t("settings.logoutPending", { n: pendingOps }))
+    )
+      return;
+    outbox.current?.clear();
+    await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
+    await forgetLocalData();
+    // Recarga completa a propósito: así no queda nada de la sesión en memoria.
+    // eslint-disable-next-line @next/next/no-location-assign-relative-destination
+    window.location.href = "/login";
+  }
+
+  /* eslint-enable react-hooks/purity */
 
   /* ---------- selección y cambios en bloque ---------- */
 
@@ -475,8 +579,8 @@ export default function ListView({ initial }: { initial: Snapshot }) {
     });
   }
 
-  async function bulkPatch(patch: { category?: string | null; store_id?: string | null }) {
-    const ids = [...selected].filter((id) => !id.startsWith("temp-"));
+  function bulkPatch(patch: { category?: string | null; store_id?: string | null }) {
+    const ids = [...selected];
     if (!ids.length) return;
     touch();
     setItems((prev) =>
@@ -485,34 +589,27 @@ export default function ListView({ initial }: { initial: Snapshot }) {
       ),
     );
     setBulkMsg(t("select.applied", { n: ids.length }));
-    await fetch("/api/items/bulk", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ids, ...patch }),
-    });
-    touch();
+    void json("PATCH", "/api/items/bulk", { ids, ...patch }).then(touch);
   }
 
-  async function bulkCategory(value: string) {
+  function bulkCategory(value: string) {
     if (value === NUEVA) {
       const n = window.prompt(t("category.promptNew"));
       if (!n?.trim()) return;
-      const saved = await createCategory(n.trim());
-      if (saved) await bulkPatch({ category: saved });
+      bulkPatch({ category: createCategory(n.trim()) });
       return;
     }
-    await bulkPatch({ category: value === SIN_CATEGORIA ? null : value });
+    bulkPatch({ category: value === SIN_CATEGORIA ? null : value });
   }
 
-  async function bulkStore(value: string) {
+  function bulkStore(value: string) {
     if (value === NUEVA) {
       const n = window.prompt(t("store.promptNew"));
       if (!n?.trim()) return;
-      const id = await createStore(n.trim());
-      if (id) await bulkPatch({ store_id: id });
+      bulkPatch({ store_id: createStore(n.trim()) });
       return;
     }
-    await bulkPatch({ store_id: value === SIN_SUPER ? null : value });
+    bulkPatch({ store_id: value === SIN_SUPER ? null : value });
   }
 
   /* ---------- derivados ---------- */
@@ -799,6 +896,24 @@ export default function ListView({ initial }: { initial: Snapshot }) {
             ⋯
           </button>
         </div>
+
+        {(offline || pendingOps > 0) && (
+          <p
+            role="status"
+            className={`mt-2 rounded-lg px-3 py-1.5 text-xs ${
+              offline ? "bg-surface-2 text-muted" : "text-muted"
+            }`}
+          >
+            {offline ? (
+              <>
+                📴 {t("sync.offline")}
+                {pendingOps > 0 && <> · {t("sync.pending", { n: pendingOps })}</>}
+              </>
+            ) : (
+              <>↻ {t("sync.sending", { n: pendingOps })}</>
+            )}
+          </p>
+        )}
 
         <form onSubmit={addItem} className="mt-3 flex gap-2">
           <input
@@ -1184,6 +1299,7 @@ export default function ListView({ initial }: { initial: Snapshot }) {
           onCreateStore={createStore}
           onCreateCategory={createCategory}
           onNotify={() => notifyAbout(editing.id)}
+          offline={offline}
         />
       )}
 
@@ -1204,6 +1320,7 @@ export default function ListView({ initial }: { initial: Snapshot }) {
           onMoveCategory={moveCategory}
           onClearDone={clearDone}
           onSetCurrency={setCurrency}
+          onLogout={logout}
         />
       )}
     </main>

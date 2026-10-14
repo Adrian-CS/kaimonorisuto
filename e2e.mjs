@@ -172,7 +172,10 @@ async function run(browser, lang, s) {
   const page = await ctx.newPage();
   const errors = [];
   page.on("console", (m) => {
-    if (m.type() === "error") errors.push("console: " + m.text());
+    // Sin red, el navegador avisa de cada petición fallida: es lo esperado
+    // en el paso sin conexión, no un error de la app.
+    if (m.type() === "error" && !/ERR_INTERNET_DISCONNECTED|Failed to fetch/.test(m.text()))
+      errors.push("console: " + m.text());
   });
   page.on("pageerror", (e) => errors.push("pageerror: " + e.message));
   page.on("dialog", (d) => d.accept());
@@ -788,6 +791,108 @@ async function run(browser, lang, s) {
         : "メールアドレスかパスワードが違います";
     if (msg?.trim() !== expected) throw new Error(`mensaje: ${msg}`);
     await c5.close();
+  });
+
+  await step("nombres con tilde: «Ácido» y «ácido» son la misma categoría", async () => {
+    const a = await (await page.request.post(`${BASE}/api/categories`, { data: { name: "Ácido" } })).json();
+    const b = await (await page.request.post(`${BASE}/api/categories`, { data: { name: "ácido" } })).json();
+    if (a.id !== b.id || b.name !== "Ácido") throw new Error(JSON.stringify({ a, b }));
+    const st1 = await (await page.request.post(`${BASE}/api/stores`, { data: { name: "Ñam" } })).json();
+    const st2 = await (await page.request.post(`${BASE}/api/stores`, { data: { name: "ñam" } })).json();
+    if (st1.id !== st2.id) throw new Error("tiendas duplicadas por mayúsculas con tilde");
+    await page.request.delete(`${BASE}/api/stores/${st1.id}`);
+  });
+
+  await step("renombrar a una categoría existente las junta (merge)", async () => {
+    let snap = await (await page.request.get(`${BASE}/api/snapshot`)).json();
+    const acido = snap.categories.find((c) => c.name === "Ácido");
+    const sprite = snap.items.find((x) => x.name === "Sprite");
+    await page.request.patch(`${BASE}/api/items/${sprite.id}`, { data: { category: "Ácido" } });
+    const res = await page.request.patch(`${BASE}/api/categories/${acido.id}`, {
+      data: { name: s.categoryValue.toUpperCase(), merge: true },
+    });
+    const body = await res.json();
+    if (!body.merged) throw new Error(`no ha fusionado: ${JSON.stringify(body)}`);
+    snap = await (await page.request.get(`${BASE}/api/snapshot`)).json();
+    if (snap.categories.some((c) => c.name === "Ácido"))
+      throw new Error("la categoría fusionada sigue existiendo");
+    if (snap.items.find((x) => x.name === "Sprite").category !== s.categoryValue)
+      throw new Error("Sprite no ha pasado a la otra categoría");
+  });
+
+  await step("añadir con un id de cliente es idempotente", async () => {
+    const id = crypto.randomUUID();
+    for (let i = 0; i < 2; i++) {
+      const r = await page.request.post(`${BASE}/api/items`, { data: { id, name: "Reintento" } });
+      if ((await r.json()).id !== id) throw new Error("no respeta el id del cliente");
+    }
+    const snap = await (await page.request.get(`${BASE}/api/snapshot`)).json();
+    const n = snap.items.filter((x) => x.name === "Reintento").length;
+    if (n !== 1) throw new Error(`hay ${n} «Reintento»`);
+    await page.request.delete(`${BASE}/api/items/${id}`);
+  });
+
+  await step("una foto subida y no guardada se borra al cerrar", async () => {
+    await page.reload({ waitUntil: "networkidle" });
+    await page.getByRole("button", { name: s.editItem("Papel Albal") }).click();
+    await page.locator('[data-photo-input="album"]').setInputFiles(MARCA);
+    const img = page.locator('[data-sheet-panel] img[src^="/api/photos/"]');
+    await img.waitFor({ timeout: 20000 });
+    const src = await img.getAttribute("src");
+    if ((await page.request.get(BASE + src)).status() !== 200) throw new Error("no se subió");
+    await page.getByRole("button", { name: s.close, exact: true }).click();
+    await page.waitForTimeout(800);
+    const status = (await page.request.get(BASE + src)).status();
+    if (status !== 404) throw new Error(`la foto sigue en R2 (${status})`);
+  });
+
+  await step("cambiar la foto borra la anterior de R2", async () => {
+    const snap = await (await page.request.get(`${BASE}/api/snapshot`)).json();
+    const nutella = snap.items.find((x) => x.name === "Nutella");
+    const old = nutella.photo_key;
+    if (!old) throw new Error("Nutella no tiene foto");
+    const form = { file: { name: "x.png", mimeType: "image/png", buffer: fs.readFileSync(MARCA) } };
+    const up = await (await page.request.post(`${BASE}/api/photos`, { multipart: form })).json();
+    await page.request.patch(`${BASE}/api/items/${nutella.id}`, { data: { photo_key: up.key } });
+    if ((await page.request.get(`${BASE}/api/photos/${old}`)).status() !== 404)
+      throw new Error("la foto anterior sigue en R2");
+    if ((await page.request.get(`${BASE}/api/photos/${up.key}`)).status() !== 200)
+      throw new Error("la foto nueva no está");
+  });
+
+  await step("sin conexión: abrir, añadir, marcar y sincronizar al volver", async () => {
+    // Que el service worker controle la página y guarde lo necesario.
+    await page.reload({ waitUntil: "networkidle" });
+    await page.evaluate(() => navigator.serviceWorker.ready);
+    await page.reload({ waitUntil: "networkidle" });
+    await page.waitForFunction(() => !!navigator.serviceWorker.controller);
+    await page.waitForTimeout(1500); // precache
+    const before = await (await page.request.get(`${BASE}/api/snapshot`)).json();
+    const fantaWas = before.items.find((x) => x.name === "Fanta limón").done;
+
+    await ctx.setOffline(true);
+    await page.getByPlaceholder(s.add).fill("Sin cobertura");
+    await page.keyboard.press("Enter");
+    await page.locator("main ul li", { hasText: "Fanta limón" }).first()
+      .locator("button").first().click();
+    await page.getByRole("status").waitFor();
+    await page.screenshot({ path: `${SHOTS}/${lang}-07-sin-conexion.png` });
+
+    // Recargar sin red: la app sale de la caché con los cambios pendientes.
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.waitForSelector("text=Sin cobertura");
+    await page.waitForSelector('main img[src^="/api/photos/"]'); // foto desde caché
+    const statusText = await page.getByRole("status").textContent();
+    if (!/2/.test(statusText ?? "")) throw new Error(`pendientes: ${statusText}`);
+
+    await ctx.setOffline(false);
+    await page.evaluate(() => window.dispatchEvent(new Event("online")));
+    await page.getByRole("status").waitFor({ state: "detached", timeout: 15000 });
+    const snap = await (await page.request.get(`${BASE}/api/snapshot`)).json();
+    const added = snap.items.filter((x) => x.name === "Sin cobertura");
+    if (added.length !== 1) throw new Error(`«Sin cobertura» x${added.length}`);
+    if (snap.items.find((x) => x.name === "Fanta limón").done === fantaWas)
+      throw new Error("el cambio de Fanta limón no llegó");
   });
 
   await step("borrar comprados", async () => {

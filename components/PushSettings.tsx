@@ -38,15 +38,17 @@ export default function PushSettings() {
   const [subscribed, setSubscribed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<"sent" | "failed" | null>(null);
-  const [permission, setPermission] = useState<NotificationPermission | "unsupported">(
-    "default",
-  );
-
   const supported =
     typeof window !== "undefined" &&
     "serviceWorker" in navigator &&
     "PushManager" in window &&
     "Notification" in window;
+
+  // Solo se pinta dentro de Ajustes, que nunca se renderiza en el servidor,
+  // así que se puede leer el permiso del navegador desde el principio.
+  const [permission, setPermission] = useState<NotificationPermission | "unsupported">(
+    () => (supported ? Notification.permission : "unsupported"),
+  );
 
   const refresh = useCallback(async () => {
     const res = await fetch("/api/push", { cache: "no-store" });
@@ -57,11 +59,7 @@ export default function PushSettings() {
   }, []);
 
   useEffect(() => {
-    if (!supported) {
-      setPermission("unsupported");
-      return;
-    }
-    setPermission(Notification.permission);
+    if (!supported) return;
 
     void (async () => {
       const data = await refresh();

@@ -23,22 +23,24 @@ export default function MenuSheet({
   onMoveCategory,
   onClearDone,
   onSetCurrency,
+  onLogout,
 }: {
   me: Me;
   stores: Store[];
   categories: Category[];
   doneCount: number;
   onClose: () => void;
-  onCreateStore: (name: string) => Promise<string | null>;
-  onRenameStore: (id: string, name: string) => Promise<void>;
-  onDeleteStore: (id: string) => Promise<void>;
-  onMoveStore: (id: string, dir: -1 | 1) => Promise<void>;
-  onCreateCategory: (name: string) => Promise<string | null>;
-  onRenameCategory: (id: string, name: string) => Promise<void>;
-  onDeleteCategory: (id: string) => Promise<void>;
-  onMoveCategory: (id: string, dir: -1 | 1) => Promise<void>;
-  onClearDone: () => Promise<void>;
-  onSetCurrency: (c: Currency) => Promise<void>;
+  onCreateStore: (name: string) => unknown;
+  onRenameStore: (id: string, name: string) => unknown;
+  onDeleteStore: (id: string) => unknown;
+  onMoveStore: (id: string, dir: -1 | 1) => unknown;
+  onCreateCategory: (name: string) => unknown;
+  onRenameCategory: (id: string, name: string) => unknown;
+  onDeleteCategory: (id: string) => unknown;
+  onMoveCategory: (id: string, dir: -1 | 1) => unknown;
+  onClearDone: () => unknown;
+  onSetCurrency: (c: Currency) => unknown;
+  onLogout: () => unknown;
 }) {
   const { t } = useI18n();
   const [copied, setCopied] = useState(false);
@@ -138,10 +140,7 @@ export default function MenuSheet({
         <button
           type="button"
           className="btn"
-          onClick={async () => {
-            await fetch("/api/auth/logout", { method: "POST" });
-            window.location.href = "/login";
-          }}
+          onClick={onLogout}
         >
           {t("settings.logout", { name: me.userName })}
         </button>
@@ -167,10 +166,10 @@ function NameList({
   placeholder: string;
   entries: { id: string; name: string }[];
   deleteConfirm: (name: string) => string;
-  onCreate: (name: string) => Promise<string | null>;
-  onRename: (id: string, name: string) => Promise<void>;
-  onDelete: (id: string) => Promise<void>;
-  onMove: (id: string, dir: -1 | 1) => Promise<void>;
+  onCreate: (name: string) => unknown;
+  onRename: (id: string, name: string) => unknown;
+  onDelete: (id: string) => unknown;
+  onMove: (id: string, dir: -1 | 1) => unknown;
 }) {
   const { t } = useI18n();
   const [draft, setDraft] = useState("");

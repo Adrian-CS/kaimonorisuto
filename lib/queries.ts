@@ -1,4 +1,5 @@
 import { getDb, newId, now } from "./db";
+import { sameName } from "./names";
 import { nameKey } from "./money";
 import type { Category, Item, Store } from "./types";
 
@@ -25,33 +26,28 @@ export async function listCategories(householdId: string): Promise<Category[]> {
 }
 
 /**
- * Devuelve la categoría con ese nombre (sin distinguir mayúsculas), creándola
- * al final de la lista si aún no existe. Devuelve el nombre tal y como está
- * guardado, para que los artículos no acaben con «leche» y «Leche».
+ * Devuelve la categoría con ese nombre (sin distinguir mayúsculas ni tildes
+ * en mayúscula), creándola al final de la lista si aún no existe. Devuelve el
+ * nombre tal y como está guardado, para que los artículos no acaben con
+ * «leche» y «Leche». `wantedId` es el id que propone el cliente al crearla
+ * sin conexión; un reintento con el mismo id devuelve la misma categoría.
  */
 export async function ensureCategory(
   householdId: string,
   name: string,
+  wantedId: string | null = null,
 ): Promise<{ id: string; name: string }> {
-  const db = await getDb();
-  const dup = await db
-    .prepare(
-      "SELECT id, name FROM categories WHERE household_id = ? AND name = ? COLLATE NOCASE",
-    )
-    .bind(householdId, name)
-    .first<{ id: string; name: string }>();
-  if (dup) return dup;
+  const all = await listCategories(householdId);
+  const dup = all.find((c) => c.id === wantedId || sameName(c.name, name));
+  if (dup) return { id: dup.id, name: dup.name };
 
-  const max = await db
-    .prepare("SELECT MAX(sort_order) AS m FROM categories WHERE household_id = ?")
-    .bind(householdId)
-    .first<{ m: number | null }>();
-  const id = newId();
+  const db = await getDb();
+  const id = wantedId ?? newId();
   await db
     .prepare(
       "INSERT INTO categories (id, household_id, name, sort_order, created_at) VALUES (?, ?, ?, ?, ?)",
     )
-    .bind(id, householdId, name, (max?.m ?? 0) + 1, now())
+    .bind(id, householdId, name, Math.max(0, ...all.map((c) => c.sort_order)) + 1, now())
     .run();
   return { id, name };
 }

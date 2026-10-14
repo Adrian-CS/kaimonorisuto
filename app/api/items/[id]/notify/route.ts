@@ -20,7 +20,10 @@ const COOLDOWN_MS = 5 * 60 * 1000;
 export const POST = handler(async (req: Request, ctx: Ctx) => {
   const me = await requireMe();
   const { id } = await ctx.params;
-  const body = (await req.json().catch(() => ({}))) as { toggle?: boolean };
+  const body = (await req.json().catch(() => ({}))) as {
+    toggle?: boolean;
+    done?: number | boolean;
+  };
 
   const db = await getDb();
   const item = await db
@@ -36,8 +39,11 @@ export const POST = handler(async (req: Request, ctx: Ctx) => {
   let kind: NotifyKind = "ping";
 
   // El cambio de estado es lo principal: ocurre aunque el aviso se descarte.
-  if (body.toggle) {
-    done = item.done ? 0 : 1;
+  // `done` dice el estado final y es lo que manda el cliente: así, si la
+  // petición se reintenta (p. ej. al volver la conexión), no se deshace sola.
+  // `toggle` se mantiene por compatibilidad con clientes antiguos.
+  if ("done" in body || body.toggle) {
+    done = "done" in body ? (body.done ? 1 : 0) : item.done ? 0 : 1;
     await db
       .prepare("UPDATE items SET done = ?, updated_at = ? WHERE id = ?")
       .bind(done, t, id)

@@ -117,6 +117,16 @@ const es = {
 
   "drag.handle": "Mover {name}",
 
+  "sync.offline": "Sin conexión. Puedes seguir usando la lista: los cambios se mandan al volver.",
+  "sync.pending": "{n} cambios por enviar",
+  "sync.sending": "Enviando {n} cambios…",
+  "item.notifyQueued": "Sin conexión: el aviso saldrá al volver.",
+  "list.notifyQueued": "Se avisará al volver la conexión",
+  "photo.offline": "Sin conexión no se pueden añadir fotos.",
+  "category.mergeConfirm": "Ya existe «{name}». ¿Juntar las dos categorías en una?",
+  "settings.logoutPending":
+    "Hay {n} cambios sin enviar todavía. Si cierras sesión ahora se perderán. ¿Salir igualmente?",
+
   "category.promptNew": "Nombre de la categoría",
   "category.deleteConfirm":
     "¿Borrar «{name}»? Sus artículos se quedarán sin categoría.",
@@ -275,6 +285,16 @@ const ja: Record<Key, string> = {
   "bell.off": "知らせずに追加",
 
   "drag.handle": "{name}を移動",
+
+  "sync.offline": "オフラインです。このまま使えます。変更は接続が戻ったら送信されます。",
+  "sync.pending": "未送信の変更：{n}件",
+  "sync.sending": "{n}件の変更を送信中…",
+  "item.notifyQueued": "オフラインのため、接続が戻ったら知らせます。",
+  "list.notifyQueued": "接続が戻ったら知らせます",
+  "photo.offline": "オフラインでは写真を追加できません。",
+  "category.mergeConfirm": "「{name}」はすでにあります。2つのカテゴリを1つにまとめますか？",
+  "settings.logoutPending":
+    "まだ送信していない変更が{n}件あります。今ログアウトすると失われます。ログアウトしますか？",
 
   "category.promptNew": "カテゴリの名前",
   "category.deleteConfirm":

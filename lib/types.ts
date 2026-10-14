@@ -42,4 +42,6 @@ export type Snapshot = {
   stores: Store[];
   categories: Category[];
   items: Item[];
+  /** Cuándo se generó en el servidor (para compararlo con la copia local). */
+  servedAt?: number;
 };

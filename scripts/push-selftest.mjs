@@ -8,7 +8,7 @@
 import { webcrypto as crypto } from "node:crypto";
 import http from "node:http";
 import { build } from "esbuild";
-import { writeFileSync, mkdtempSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -18,7 +18,10 @@ const utf8 = (s) => new TextEncoder().encode(s);
 const cat = (...xs) => {
   const out = new Uint8Array(xs.reduce((n, x) => n + x.length, 0));
   let at = 0;
-  for (const x of xs) (out.set(x, at), (at += x.length));
+  for (const x of xs) {
+    out.set(x, at);
+    at += x.length;
+  }
   return out;
 };
 

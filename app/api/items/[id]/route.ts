@@ -1,6 +1,7 @@
 import { requireMe } from "@/lib/auth";
 import { fail, handler, json, opt } from "@/lib/api";
-import { PHOTO_PREFIX, getDb, getEnv, now } from "@/lib/db";
+import { getDb, now } from "@/lib/db";
+import { deletePhotoIfUnused } from "@/lib/photos";
 import { ensureCategory, rememberPrice } from "@/lib/queries";
 
 export const dynamic = "force-dynamic";
@@ -54,6 +55,16 @@ export const PATCH = handler(async (req: Request, ctx: Ctx) => {
   values.push(now());
 
   const db = await getDb();
+
+  // Si cambia la foto, la anterior se borra cuando nadie más la use.
+  const before =
+    "photo_key" in body
+      ? await db
+          .prepare("SELECT photo_key FROM items WHERE id = ? AND household_id = ?")
+          .bind(id, me.householdId)
+          .first<{ photo_key: string | null }>()
+      : null;
+
   const res = await db
     .prepare(
       `UPDATE items SET ${sets.join(", ")} WHERE id = ? AND household_id = ?`,
@@ -62,6 +73,9 @@ export const PATCH = handler(async (req: Request, ctx: Ctx) => {
     .run();
 
   if (!res.meta.changes) return fail("not_found", 404);
+
+  if (before?.photo_key && before.photo_key !== opt(body.photo_key))
+    await deletePhotoIfUnused(me.householdId, before.photo_key);
 
   // Recuerda el precio para la próxima vez que se añada este producto.
   if (typeof body.price === "number" && body.price > 0) {
@@ -98,17 +112,7 @@ export const DELETE = handler(async (_req: Request, ctx: Ctx) => {
     .run();
 
   // Limpia la foto de R2 si ya no la usa ningún otro artículo.
-  if (row.photo_key) {
-    const stillUsed = await db
-      .prepare("SELECT 1 FROM items WHERE photo_key = ? LIMIT 1")
-      .bind(row.photo_key)
-      .first();
-    if (!stillUsed) {
-      const env = await getEnv();
-      if (row.photo_key.startsWith(`${PHOTO_PREFIX}/${me.householdId}/`))
-        await env.PHOTOS.delete(row.photo_key);
-    }
-  }
+  await deletePhotoIfUnused(me.householdId, row.photo_key);
 
   return json({ ok: true });
 });

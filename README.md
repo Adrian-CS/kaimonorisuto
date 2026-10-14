@@ -72,6 +72,7 @@ components/
   ItemSheet.tsx            editor de artículo (foto, súper, campos opcionales)
   MenuSheet.tsx            idioma, moneda, notificaciones, tiendas, invitación
   PushSettings.tsx         alta/baja de notificaciones en este dispositivo
+  PhotoViewer.tsx          foto a pantalla completa con zoom
   I18n.tsx                 contexto de idioma + selector
 lib/
   i18n.ts                  diccionario es/ja
@@ -81,7 +82,10 @@ lib/
   money.ts                 formato y parseo de precios (¥ / €)
   push.ts                  VAPID + cifrado aes128gcm para Web Push
   notify.ts                a quién avisar y en qué idioma
-public/sw.js               service worker (solo notificaciones)
+  outbox.ts                cola de cambios y copia local (uso sin conexión)
+  photos.ts                limpieza de fotos en R2
+  names.ts                 comparar nombres sin mayúsculas (con tildes)
+public/sw.js               service worker (notificaciones y caché sin conexión)
 scripts/vapid.mjs          genera las claves VAPID
 scripts/push-selftest.mjs  prueba real del cifrado de Web Push
 migrations/
@@ -100,6 +104,43 @@ que tocar la miniatura de una fila de la lista (que así no marca el artículo).
 En el visor se amplía pellizcando o con doble toque, se arrastra para moverse
 por la foto ampliada, y se cierra deslizando hacia abajo, tocando fuera, con ✕
 o con Escape.
+
+### Limpieza de fotos en R2
+
+Una foto se borra de R2 en cuanto ningún artículo la usa: al borrar el
+artículo, al cambiarle o quitarle la foto, y al cerrar la ficha sin guardar una
+foto recién subida. Además, «Borrar los comprados» barre las fotos del hogar que
+no use ningún artículo y tengan más de un día (`lib/photos.ts`), lo que recoge
+también las que quedaron sueltas antes de que existiera esto.
+
+## Sin conexión
+
+En el súper no siempre hay cobertura, así que la app funciona sin red:
+
+- **Se abre sin conexión.** El service worker (`public/sw.js`) guarda la página,
+  el código (`/_next/static`) y las fotos que ya se han visto. La página se pide
+  primero a la red y, si no hay, sale la última copia.
+- **La lista está en el móvil.** Cada cambio se guarda también en
+  `localStorage`; al abrir sin red se enseña esa copia, que es más reciente que
+  la página guardada.
+- **Los cambios esperan en una cola** (`lib/outbox.ts`): marcar, añadir,
+  editar, borrar, cambios en bloque, tiendas, categorías… La pantalla cambia al
+  momento y la cola los manda en orden en cuanto vuelve la red. Arriba aparece
+  un aviso con cuántos quedan por enviar.
+- **Reintentar es seguro.** Lo nuevo (artículos, tiendas, categorías) lleva un
+  id generado en el móvil, así que mandarlo dos veces no lo duplica, y marcar
+  con «mantener pulsado» manda el estado final en vez de «alternar». Si al
+  volver resulta que la otra persona creó una tienda con el mismo nombre, se usa
+  la suya y la cola corrige los cambios que apuntaban a la provisional.
+- **Mientras haya cambios en cola, no se refresca** desde el servidor (lo de
+  allí está desfasado respecto a la pantalla). En cuanto se vacía, se trae lo
+  que haya cambiado la otra persona.
+- **Lo que no funciona sin red:** subir fotos (los botones se desactivan) y la
+  sugerencia de precio recordado. Los avisos a la otra persona se mandan al
+  volver la conexión.
+- Si los dos cambiáis lo mismo sin conexión, gana el último que se sincroniza.
+- Al **cerrar sesión** se borran la copia local, la cola y la caché. Si quedan
+  cambios sin enviar, la app avisa antes.
 
 ## Precio orientativo
 
@@ -180,7 +221,9 @@ Los artículos guardan el **nombre** de la categoría en `items.category`, no un
 id, así que la migración `0004_categorias.sql` no toca datos: crea la tabla
 `categories` a partir de las categorías que ya estaban escritas (fusionando
 mayúsculas/minúsculas). Renombrar una categoría la renombra en sus artículos, y
-borrarla los deja sin categoría.
+borrarla los deja sin categoría. Renombrarla como otra que ya existe las **junta**
+(previa confirmación). Los nombres se comparan sin distinguir mayúsculas,
+también con tildes («Ácido» = «ácido»), en `lib/names.ts`.
 
 Para no ir artículo por artículo, el botón **Seleccionar** de la barra de filtros
 cambia el toque de las filas: en vez de tachar, marca. Tocar el título de un
@@ -281,6 +324,8 @@ Settings → Domains & Routes → Add custom domain.
 ```bash
 npm run db:local     # aplica migraciones a la D1 local
 npm run dev          # next dev con los bindings de Cloudflare
+npm run lint         # ESLint (config plana de eslint-config-next)
+npx tsc --noEmit     # tipos
 ```
 
 Para probar el bundle real de Workers antes de desplegar:
@@ -291,13 +336,18 @@ npm run preview      # build de OpenNext + wrangler dev en :8787
 
 ## Tests end-to-end
 
-`e2e.mjs` recorre con Playwright el flujo completo **en los dos idiomas** (50
-pasos): detección de idioma por `Accept-Language`, registro, alta de artículos,
-marcar comprado, supermercados, subida y servido de la foto desde R2, precio y
-totales, precio recordado al volver a añadir, cambio de moneda, arrastrar entre
-grupos, la campana (que por defecto no avisa y se apaga sola), la API de push,
+`e2e.mjs` recorre con Playwright el flujo completo **en los dos idiomas** (42
+pasos en cada uno): detección de idioma por `Accept-Language`, registro, alta de
+artículos, marcar comprado, supermercados y categorías, subida y servido de la
+foto desde R2 (y su limpieza), visor de fotos, precio y totales, precio recordado
+al volver a añadir, cambio de moneda, arrastrar entre grupos, cambios en bloque,
+la campana (que por defecto no avisa y se apaga sola), la API de push,
 agrupaciones, cambio de idioma en caliente, código de invitación, aislamiento
-entre casas, sesión caducada y errores de la API traducidos.
+entre casas, sesión caducada, errores de la API traducidos y **uso sin
+conexión** (cortando la red al navegador y recargando).
+
+El paso «API de push disponible» falla si no hay claves VAPID en `.dev.vars`;
+es lo esperado sin ellas.
 
 ```bash
 npm i -D playwright

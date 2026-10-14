@@ -1,5 +1,5 @@
 import { requireMe } from "@/lib/auth";
-import { fail, handler, json, opt } from "@/lib/api";
+import { clientId, fail, handler, json, opt } from "@/lib/api";
 import { ensureCategory } from "@/lib/queries";
 
 export const dynamic = "force-dynamic";
@@ -10,5 +10,5 @@ export const POST = handler(async (req: Request) => {
   const name = opt(body.name);
   if (!name) return fail("category_name_required");
 
-  return json(await ensureCategory(me.householdId, name));
+  return json(await ensureCategory(me.householdId, name, clientId(body.id)));
 });

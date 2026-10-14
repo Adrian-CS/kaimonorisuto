@@ -15,5 +15,11 @@ export default async function Home() {
     listItems(me.householdId),
   ]);
 
-  return <ListView initial={{ me, stores, categories, items }} />;
+  return (
+    <ListView
+      // Componente de servidor: se pinta una vez por petición.
+      // eslint-disable-next-line react-hooks/purity
+      initial={{ me, stores, categories, items, servedAt: Date.now() }}
+    />
+  );
 }

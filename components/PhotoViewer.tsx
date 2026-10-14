@@ -27,7 +27,7 @@ export default function PhotoViewer({
   onClose: () => void;
 }) {
   const { t } = useI18n();
-  const [view, setView] = useState<View>(RESET);
+  const [view, setViewState] = useState<View>(RESET);
   const [dragY, setDragY] = useState(0); // desplazamiento del gesto de cerrar
   const [animate, setAnimate] = useState(false);
 
@@ -45,8 +45,13 @@ export default function PhotoViewer({
   } | null>(null);
   const lastTap = useRef(0);
   const tapTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const viewRef = useRef(view);
-  viewRef.current = view;
+  // Copia síncrona de la vista para los gestores de eventos, que leen la
+  // vista justo después de cambiarla (antes de que React vuelva a pintar).
+  const viewRef = useRef<View>(RESET);
+  const setView = (v: View) => {
+    viewRef.current = v;
+    setViewState(v);
+  };
 
   useEffect(
     () => () => {
@@ -171,7 +176,6 @@ export default function PhotoViewer({
       }
     }
     if (next.scale <= 1.01) next = RESET;
-    viewRef.current = next;
     setView(next);
     // Si queda un dedo tras un pellizco, sigue como arrastre desde ahí.
     begin();

@@ -1,6 +1,7 @@
 import { requireMe } from "@/lib/auth";
-import { fail, handler } from "@/lib/api";
+import { fail, handler, json } from "@/lib/api";
 import { PHOTO_PREFIX, getEnv } from "@/lib/db";
+import { deletePhotoIfUnused } from "@/lib/photos";
 
 export const dynamic = "force-dynamic";
 
@@ -26,4 +27,16 @@ export const GET = handler(async (_req: Request, ctx: Ctx) => {
       ETag: obj.httpEtag,
     },
   });
+});
+
+/**
+ * Borra una foto recién subida que al final no se usó (se cambió por otra o
+ * se cerró la ficha sin guardar). Si algún artículo la usa, no hace nada.
+ */
+export const DELETE = handler(async (_req: Request, ctx: Ctx) => {
+  const me = await requireMe();
+  const { key: parts } = await ctx.params;
+  const key = parts.map(decodeURIComponent).join("/");
+  await deletePhotoIfUnused(me.householdId, key);
+  return json({ ok: true });
 });

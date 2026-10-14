@@ -24,6 +24,13 @@ export function handler<A extends unknown[]>(
   };
 }
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Id generado en el cliente (para poder crear cosas sin conexión), si es válido. */
+export function clientId(v: unknown): string | null {
+  return typeof v === "string" && UUID.test(v) ? v.toLowerCase() : null;
+}
+
 /** Normaliza un campo opcional del formulario: "" -> null. */
 export function opt(v: unknown): string | null {
   if (typeof v !== "string") return null;
