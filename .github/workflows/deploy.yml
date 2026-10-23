@@ -29,6 +29,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          # Sin esto se usa la 22.x que traiga la imagen del runner, que puede
+          # ir por detrás de los parches de seguridad de Node.
+          check-latest: true
           cache: npm
 
       - name: Comprobar credenciales
