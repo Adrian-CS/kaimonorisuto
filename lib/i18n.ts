@@ -117,6 +117,17 @@ const es = {
 
   "drag.handle": "Mover {name}",
 
+  "undo.action": "Deshacer",
+  "undo.need": "«{name}» vuelve a la lista",
+  "undo.have": "«{name}» tachado",
+  "undo.deleted": "«{name}» borrado",
+  "undo.cleared": "{n} comprados borrados",
+  "review.start": "Repaso",
+  "review.hint": "Toca lo que haga falta",
+  "review.count": "Hacen falta {n}",
+  "review.done": "Listo",
+  "review.toggle": "{name}: hace falta",
+
   "shop.start": "🛒 En la tienda",
   "shop.pick": "¿En qué tienda estás?",
   "shop.noStores": "Primero añade tus supermercados en Ajustes.",
@@ -312,6 +323,17 @@ const ja: Record<Key, string> = {
   "bell.off": "知らせずに追加",
 
   "drag.handle": "{name}を移動",
+
+  "undo.action": "元に戻す",
+  "undo.need": "「{name}」をリストに戻しました",
+  "undo.have": "「{name}」を購入済みにしました",
+  "undo.deleted": "「{name}」を削除しました",
+  "undo.cleared": "購入済み{n}件を削除しました",
+  "review.start": "見直し",
+  "review.hint": "必要なものをタップ",
+  "review.count": "必要なもの {n}件",
+  "review.done": "完了",
+  "review.toggle": "{name}：必要",
 
   "shop.start": "🛒 買い物中",
   "shop.pick": "どのお店にいますか？",

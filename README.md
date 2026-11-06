@@ -15,6 +15,10 @@ Todo lo demás es opcional: se puede usar escribiendo solo el nombre.
   de categoría.
 - **Categorías como las tiendas**: se crean una vez en Ajustes (o con el «+» de
   la ficha) y luego se eligen de una lista.
+- **Deshacer**: tachar, destachar, borrar o «Borrar los comprados» se pueden
+  deshacer durante unos segundos.
+- **Repaso**: toda la lista como fichas compactas por categoría, para ver de
+  un vistazo qué hace falta (útil si la usas como despensa).
 - **Modo tienda**: dentro del súper, solo lo de esa tienda, grande y por
   pasillos, sin que se apague la pantalla.
 - **Varias tiendas por artículo**: «leche, en Mercadona o en Seiyu». Sale en
@@ -225,6 +229,22 @@ Como un artículo puede estar en varias tiendas, soltarlo en otra **le añade**
 esa tienda (sigue en las que tenía); soltarlo en «Sin supermercado» se las
 quita todas. Para quitarle solo una, desde la ficha.
 Los grupos vacíos se pintan en gris justo para poder soltar ahí.
+
+## Deshacer y repaso
+
+**Deshacer.** Al tachar o destachar (también con «mantener pulsado»), al borrar
+un artículo o al usar «Borrar los comprados», sale abajo un aviso con
+«Deshacer» durante 5 segundos. Tachar se deshace volviendo al estado anterior.
+Los borrados, en cambio, **no se mandan al servidor hasta que caduca el
+aviso**: deshacer es simplemente no mandarlos, así que no hay nada que recrear
+(ni fotos que perder). Si se cierra o se esconde la app antes, el borrado sale
+en ese momento; y como pasa por la cola, aunque no llegue a enviarse se queda
+guardado y sale al volver a abrirla.
+
+**Repaso.** Para quien usa la lista como despensa (tachado = lo tengo,
+destachado = hace falta): todo como fichas compactas, por categorías en el orden
+de Ajustes. Lo que hace falta sale iluminado; tocar una ficha la alterna, con
+su deshacer. Caben muchas más cosas por pantalla que en la lista normal.
 
 ## Modo tienda
 

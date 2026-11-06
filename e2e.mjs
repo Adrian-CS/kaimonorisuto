@@ -37,6 +37,10 @@ const S = {
     storeName: "Nombre del supermercado",
     alsoIn: (n) => `también en ${n}`,
     shopStart: "🛒 En la tienda",
+    undo: "Deshacer",
+    review: "Repaso",
+    reviewDone: "Listo",
+    reviewToggle: (n) => `${n}: hace falta`,
     shopExit: "Salir",
     inCart: "En el carro",
     shopUnassign: (n) => `Quitarles ${n}`,
@@ -102,6 +106,10 @@ const S = {
     storeName: "お店の名前",
     alsoIn: (n) => `${n}にもあります`,
     shopStart: "🛒 買い物中",
+    undo: "元に戻す",
+    review: "見直し",
+    reviewDone: "完了",
+    reviewToggle: (n) => `${n}：必要`,
     shopExit: "終了",
     inCart: "カゴの中",
     shopUnassign: (n) => `${n}を外す`,
@@ -211,6 +219,7 @@ async function run(browser, lang, s) {
       });
       failures++;
       // Deja la UI en un estado limpio para que un fallo no arrastre a los demás.
+      await ctx.setOffline(false).catch(() => {});
       try {
         const overlay = page.locator("div.fixed.inset-0");
         if (await overlay.count())
@@ -895,19 +904,19 @@ async function run(browser, lang, s) {
     await page.keyboard.press("Enter");
     await page.locator("main ul li", { hasText: "Fanta limón" }).first()
       .locator("button").first().click();
-    await page.getByRole("status").waitFor();
+    await page.locator("header [role=status]").waitFor();
     await page.screenshot({ path: `${SHOTS}/${lang}-07-sin-conexion.png` });
 
     // Recargar sin red: la app sale de la caché con los cambios pendientes.
     await page.reload({ waitUntil: "domcontentloaded" });
     await page.waitForSelector("text=Sin cobertura");
     await page.waitForSelector('main img[src^="/api/photos/"]'); // foto desde caché
-    const statusText = await page.getByRole("status").textContent();
+    const statusText = await page.locator("header [role=status]").textContent();
     if (!/2/.test(statusText ?? "")) throw new Error(`pendientes: ${statusText}`);
 
     await ctx.setOffline(false);
     await page.evaluate(() => window.dispatchEvent(new Event("online")));
-    await page.getByRole("status").waitFor({ state: "detached", timeout: 15000 });
+    await page.locator("header [role=status]").waitFor({ state: "detached", timeout: 15000 });
     const snap = await (await page.request.get(`${BASE}/api/snapshot`)).json();
     const added = snap.items.filter((x) => x.name === "Sin cobertura");
     if (added.length !== 1) throw new Error(`«Sin cobertura» x${added.length}`);
@@ -1093,6 +1102,56 @@ async function run(browser, lang, s) {
     // Lo cogido no se toca.
     if (JSON.stringify(snap.items.find((x) => x.id === nut.id).store_ids) !== JSON.stringify([a]))
       throw new Error("ha tocado lo que ya estaba en el carro");
+  });
+
+  await step("deshacer: tachar y volver atrás", async () => {
+    await page.reload({ waitUntil: "networkidle" });
+    const row = page.locator("main ul li", { hasText: "人参" }).first();
+    const was = (await snapshot()).items.find((x) => x.name === "人参").done;
+    await row.locator("button").first().click();
+    await page.getByRole("button", { name: s.undo }).click();
+    await page.waitForTimeout(1200);
+    const now = (await snapshot()).items.find((x) => x.name === "人参").done;
+    if (now !== was) throw new Error(`no se ha deshecho: ${was} -> ${now}`);
+    if (await page.getByRole("button", { name: s.undo }).count())
+      throw new Error("el aviso sigue ahí");
+  });
+
+  await step("deshacer: un borrado no llega a salir", async () => {
+    const id = crypto.randomUUID();
+    await page.request.post(`${BASE}/api/items`, { data: { id, name: "Borrable" } });
+    await page.reload({ waitUntil: "networkidle" });
+    await page.getByRole("button", { name: s.editItem("Borrable") }).click();
+    await page.getByRole("button", { name: s.delete, exact: true }).click();
+    await page.getByRole("button", { name: s.undo }).click();
+    await page.waitForTimeout(6500); // más que lo que dura el aviso
+    if (!(await snapshot()).items.some((x) => x.id === id)) throw new Error("se ha borrado");
+    await page.locator("main ul li", { hasText: "Borrable" }).first().waitFor();
+
+    // Sin deshacer, sí se borra al caducar el aviso.
+    await page.getByRole("button", { name: s.editItem("Borrable") }).click();
+    await page.getByRole("button", { name: s.delete, exact: true }).click();
+    await page.waitForTimeout(500);
+    if (!(await snapshot()).items.some((x) => x.id === id))
+      throw new Error("se ha borrado antes de tiempo");
+    await page.waitForTimeout(6500);
+    if ((await snapshot()).items.some((x) => x.id === id)) throw new Error("no se ha borrado");
+  });
+
+  await step("repaso: fichas, tocar = hace falta", async () => {
+    await page.reload({ waitUntil: "networkidle" });
+    await page.getByRole("button", { name: s.review, exact: true }).click();
+    const pill = page.getByRole("button", { name: s.reviewToggle("Papel Albal") });
+    const before = await pill.getAttribute("aria-pressed");
+    await page.screenshot({ path: `${SHOTS}/${lang}-14-repaso.png` });
+    await pill.click();
+    await page.waitForTimeout(800);
+    if ((await pill.getAttribute("aria-pressed")) === before) throw new Error("no cambia");
+    const it = (await snapshot()).items.find((x) => x.name === "Papel Albal");
+    if (String(!it.done) !== (await pill.getAttribute("aria-pressed")))
+      throw new Error("no coincide con el servidor");
+    await page.getByRole("button", { name: s.reviewDone, exact: true }).click();
+    await page.locator("main ul li", { hasText: "Papel Albal" }).first().waitFor();
   });
 
   await step("una tienda que no es del hogar no rompe el cambio", async () => {

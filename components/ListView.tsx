@@ -135,6 +135,18 @@ export default function ListView({ initial }: { initial: Snapshot }) {
   // Modo selección: tocar marca filas en vez de tacharlas, y abajo aparece
   // una barra para cambiarles la categoría o la tienda a todas de golpe.
   const [selecting, setSelecting] = useState(false);
+  // Repaso: todo como fichas compactas para ver de un vistazo qué hace falta.
+  const [reviewing, setReviewing] = useState(false);
+
+  // Deshacer: el último cambio se puede revertir durante unos segundos.
+  const [toast, setToast] = useState<{ msg: string; undo: () => void } | null>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Un borrado no sale hacia el servidor hasta que caduca su aviso (o se
+  // ofrece otro, o se cierra la app): así deshacerlo es no mandarlo.
+  const pendingCommit = useRef<(() => void) | null>(null);
+  // Artículos borrados en pantalla cuyo borrado aún no ha salido: que el
+  // refresco no los traiga de vuelta mientras tanto.
+  const hiddenIds = useRef(new Set<string>());
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkMsg, setBulkMsg] = useState<string | null>(null);
 
@@ -229,7 +241,7 @@ export default function ListView({ initial }: { initial: Snapshot }) {
       setMe(data.me);
       setStores(data.stores);
       setCategories(data.categories ?? []);
-      setItems(normalizeItems(data.items));
+      setItems(normalizeItems(data.items).filter((i) => !hiddenIds.current.has(i.id)));
       setProducts(normalizeProducts(data.products ?? []));
     } catch {
       setNetDown(true); // sin conexión: se reintenta al siguiente tick
@@ -468,9 +480,15 @@ export default function ListView({ initial }: { initial: Snapshot }) {
     swallowClick.current = true;
     // El estado cambia igual; el aviso es el extra. Se manda el estado final
     // (no «alternar») para que reintentarlo sin conexión no lo deshaga.
-    const done = items.find((i) => i.id === id)?.done ? 0 : 1;
+    const before = items.find((i) => i.id === id);
+    const done = before?.done ? 0 : 1;
     setItems((prev) => prev.map((i) => (i.id === id ? { ...i, done } : i)));
     touch();
+    // El aviso ya no se puede retirar, pero el estado sí.
+    if (before)
+      offerUndo(t(done ? "undo.have" : "undo.need", { name: before.name }), () =>
+        patchItem(id, { done: before.done }),
+      );
 
     const { sent, reason } = await notifyAbout(id, done);
     touch();
@@ -499,20 +517,91 @@ export default function ListView({ initial }: { initial: Snapshot }) {
     void json("PATCH", `/api/items/${id}`, patch);
   }
 
-  function deleteItem(id: string) {
+  /* ---------- deshacer ---------- */
+
+  const UNDO_MS = 5000;
+
+  function commitPending() {
+    const commit = pendingCommit.current;
+    pendingCommit.current = null;
+    commit?.();
+  }
+
+  function offerUndo(msg: string, undo: () => void, commit?: () => void) {
+    commitPending(); // lo anterior ya no se puede deshacer: que salga
+    pendingCommit.current = commit ?? null;
+    setToast({ msg, undo });
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => {
+      commitPending();
+      setToast(null);
+    }, UNDO_MS);
+  }
+
+  function runUndo() {
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    pendingCommit.current = null; // el borrado pendiente no llega a salir
+    const t = toast;
+    setToast(null);
+    t?.undo();
+  }
+
+  // Si se cierra o se esconde la app con un borrado pendiente, sale ya.
+  useEffect(() => {
+    const flush = () => document.visibilityState === "hidden" && commitPending();
+    document.addEventListener("visibilitychange", flush);
+    window.addEventListener("pagehide", commitPending);
+    return () => {
+      document.removeEventListener("visibilitychange", flush);
+      window.removeEventListener("pagehide", commitPending);
+    };
+  });
+
+  /** Tachar o destachar, con su deshacer. */
+  function toggleDone(it: Item) {
+    const done = it.done ? 0 : 1;
+    patchItem(it.id, { done });
+    offerUndo(
+      t(done ? "undo.have" : "undo.need", { name: it.name }),
+      () => patchItem(it.id, { done: it.done }),
+    );
+  }
+
+  /** Quita artículos de la pantalla y deja el borrado pendiente de deshacer. */
+  function removeLater(gone: Item[], msg: string, send: () => Promise<unknown>) {
+    if (!gone.length) return;
+    const ids = new Set(gone.map((i) => i.id));
+    for (const id of ids) hiddenIds.current.add(id);
     touch();
-    setItems((prev) => prev.filter((i) => i.id !== id));
-    void json("DELETE", `/api/items/${id}`);
+    setItems((prev) => prev.filter((i) => !ids.has(i.id)));
+    offerUndo(
+      msg,
+      () => {
+        for (const id of ids) hiddenIds.current.delete(id);
+        setItems((prev) => [...prev.filter((i) => !ids.has(i.id)), ...gone]);
+      },
+      () =>
+        void send().then(() => {
+          for (const id of ids) hiddenIds.current.delete(id);
+        }),
+    );
+  }
+
+  function deleteItem(id: string) {
+    const it = items.find((i) => i.id === id);
+    if (!it) return;
+    removeLater([it], t("undo.deleted", { name: it.name }), () =>
+      json("DELETE", `/api/items/${id}`),
+    );
   }
 
   function clearDone() {
     // Se mandan los ids que se ven ahora como comprados: si la cola sale más
     // tarde, no se lleva por delante lo que la otra persona marque mientras.
-    const ids = items.filter((i) => i.done).map((i) => i.id);
-    if (!ids.length) return;
-    touch();
-    setItems((prev) => prev.filter((i) => !i.done));
-    void json("DELETE", "/api/items", { ids });
+    const gone = items.filter((i) => i.done);
+    removeLater(gone, t("undo.cleared", { n: gone.length }), () =>
+      json("DELETE", "/api/items", { ids: gone.map((i) => i.id) }),
+    );
   }
 
   function setCurrency(currency: Currency) {
@@ -836,6 +925,24 @@ export default function ListView({ initial }: { initial: Snapshot }) {
   // Si la tienda se borra (aquí o desde el otro móvil), se sale del modo.
   const shopStore = stores.find((s) => s.id === shopId) ?? null;
   const shopPending = items.filter((i) => !i.done && inShop(i, shopStore?.id));
+
+  // Repaso: todos los artículos por categoría, cada grupo en su orden manual.
+  const reviewGroups = (() => {
+    if (!reviewing) return [];
+    const order = [...categoryNames, SIN_CATEGORIA];
+    const byCat = new Map<string, Item[]>();
+    for (const it of [...items].sort((a, b) => a.sort_order - b.sort_order)) {
+      const k = it.category ?? SIN_CATEGORIA;
+      byCat.set(k, [...(byCat.get(k) ?? []), it]);
+    }
+    return [...byCat.entries()]
+      .sort((a, b) => {
+        const ia = order.indexOf(a[0]);
+        const ib = order.indexOf(b[0]);
+        return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib);
+      })
+      .map(([key, list]) => ({ key, items: list }));
+  })();
 
   const groups = useMemo(() => {
     const shop = stores.find((s) => s.id === shopId)?.id;
@@ -1252,7 +1359,21 @@ export default function ListView({ initial }: { initial: Snapshot }) {
           </button>
         </form>
 
-        {shopStore ? (
+        {reviewing && !shopStore ? (
+          <div className="mt-3 flex items-center gap-2 rounded-xl border border-accent/40 bg-accent/10 px-3 py-2">
+            <span className="min-w-0 flex-1 truncate font-medium">{t("review.hint")}</span>
+            <span className="shrink-0 text-sm text-muted tabular-nums">
+              {t("review.count", { n: pending })}
+            </span>
+            <button
+              type="button"
+              className="btn btn-primary shrink-0 px-3 py-1 text-sm"
+              onClick={() => setReviewing(false)}
+            >
+              {t("review.done")}
+            </button>
+          </div>
+        ) : shopStore ? (
           <div className="mt-3 flex items-center gap-2 rounded-xl border border-accent/40 bg-accent/10 px-3 py-2">
             <span className="min-w-0 flex-1 truncate font-medium">🛒 {shopStore.name}</span>
             <span className="shrink-0 text-sm text-muted tabular-nums">
@@ -1290,6 +1411,17 @@ export default function ListView({ initial }: { initial: Snapshot }) {
                 {label}
               </button>
             ))}
+            <button
+              type="button"
+              onClick={() => {
+                stopSelecting();
+                setReviewing(true);
+                window.scrollTo({ top: 0 });
+              }}
+              className="shrink-0 rounded-full border border-border px-3 py-1 text-muted"
+            >
+              {t("review.start")}
+            </button>
             <button
               type="button"
               onClick={() => {
@@ -1336,13 +1468,45 @@ export default function ListView({ initial }: { initial: Snapshot }) {
         )}
       </header>
 
-      {visible.length === 0 && (
+      {reviewing && !shopStore && (
+        // Repaso: todo como fichas, por categorías en el orden de Ajustes.
+        // Iluminado = hace falta (pendiente). Tocar alterna, con deshacer.
+        <div className="flex flex-col gap-4 px-4 pt-3 pb-28">
+          {reviewGroups.map((g) => (
+            <section key={g.key}>
+              <h2 className="mb-1.5 text-xs font-medium tracking-wide text-muted uppercase">
+                {groupLabel(g.key)}
+              </h2>
+              <div className="flex flex-wrap gap-1.5">
+                {g.items.map((it) => (
+                  <button
+                    key={it.id}
+                    type="button"
+                    aria-pressed={!it.done}
+                    aria-label={t("review.toggle", { name: it.name })}
+                    onClick={() => toggleDone(it)}
+                    className={`rounded-xl border px-3 py-1.5 text-[15px] ${
+                      it.done
+                        ? "border-border bg-surface text-text"
+                        : "border-accent bg-accent/20 text-accent"
+                    }`}
+                  >
+                    {it.name}
+                  </button>
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
+      )}
+
+      {!reviewing && visible.length === 0 && (
         <p className="px-4 py-16 text-center text-sm text-muted">
           {t("list.empty")}
         </p>
       )}
 
-      {groups.map((g) => {
+      {!(reviewing && !shopStore) && groups.map((g) => {
         const groupTotal = sumPending(g.items);
         return (
           <section key={g.key}>
@@ -1418,7 +1582,7 @@ export default function ListView({ initial }: { initial: Snapshot }) {
                             swallowClick.current = false;
                             return;
                           }
-                          patchItem(it.id, { done: it.done ? 0 : 1 });
+                          toggleDone(it);
                         }}
                         onPointerDown={(e) => !selecting && holdStart(e, it.id)}
                         onPointerMove={holdMove}
@@ -1556,6 +1720,22 @@ export default function ListView({ initial }: { initial: Snapshot }) {
           style={{ top: dragY - 20 }}
         >
           <span className="truncate text-sm">{draggedItem.name}</span>
+        </div>
+      )}
+
+      {toast && (
+        <div
+          role="status"
+          className={`pointer-events-none fixed inset-x-0 z-40 px-3 ${
+            selecting ? "bottom-40" : "bottom-[max(1rem,env(safe-area-inset-bottom))]"
+          }`}
+        >
+          <div className="pointer-events-auto mx-auto flex w-full max-w-md items-center gap-3 rounded-xl bg-surface-2 px-4 py-3 text-sm shadow-lg">
+            <span className="min-w-0 flex-1 truncate">{toast.msg}</span>
+            <button type="button" className="shrink-0 font-semibold text-accent" onClick={runUndo}>
+              {t("undo.action")}
+            </button>
+          </div>
         </div>
       )}
 
