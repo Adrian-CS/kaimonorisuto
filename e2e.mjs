@@ -201,7 +201,7 @@ async function run(browser, lang, s) {
     // Sin red, el navegador avisa de cada petición fallida: es lo esperado
     // en el paso sin conexión, no un error de la app.
     if (m.type() === "error" && !/ERR_INTERNET_DISCONNECTED|Failed to fetch/.test(m.text()))
-      errors.push("console: " + m.text());
+      errors.push("console: " + m.text() + (m.location()?.url ? ` (${m.location().url})` : ""));
   });
   page.on("pageerror", (e) => errors.push("pageerror: " + e.message));
   page.on("dialog", (d) => d.accept());

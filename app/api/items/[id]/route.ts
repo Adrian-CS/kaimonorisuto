@@ -123,7 +123,9 @@ export const DELETE = handler(async (_req: Request, ctx: Ctx) => {
     .prepare("SELECT photo_key FROM items WHERE id = ? AND household_id = ?")
     .bind(id, me.householdId)
     .first<{ photo_key: string | null }>();
-  if (!row) return fail("not_found", 404);
+  // Ya no existe: es un reintento (la cola lo vuelve a mandar si la respuesta
+  // se perdió, p. ej. al recargar justo después de borrar). Ya está hecho.
+  if (!row) return json({ ok: true });
 
   await db
     .prepare("DELETE FROM items WHERE id = ? AND household_id = ?")
