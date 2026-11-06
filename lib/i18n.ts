@@ -117,6 +117,19 @@ const es = {
 
   "drag.handle": "Mover {name}",
 
+  "shop.start": "🛒 En la tienda",
+  "shop.pick": "¿En qué tienda estás?",
+  "shop.noStores": "Primero añade tus supermercados en Ajustes.",
+  "shop.left": "Quedan {n}",
+  "shop.exit": "Salir",
+  "shop.inCart": "En el carro",
+  "shop.done": "¡Todo cogido!",
+  "shop.exitTitle": "Quedan {n} sin coger",
+  "shop.exitHelp": "Si no los había en {store}, ¿qué hacemos con ellos?",
+  "shop.keep": "Dejarlos como están",
+  "shop.moveTo": "Pasarlos a {store}",
+  "shop.unassign": "Quitarles {store}",
+
   "frequent.title": "Lo de siempre",
   "frequent.empty": "Aún no hay nada. Lo que marques como comprado aparecerá aquí para añadirlo de un toque.",
   "frequent.search": "Buscar en lo comprado…",
@@ -299,6 +312,19 @@ const ja: Record<Key, string> = {
   "bell.off": "知らせずに追加",
 
   "drag.handle": "{name}を移動",
+
+  "shop.start": "🛒 買い物中",
+  "shop.pick": "どのお店にいますか？",
+  "shop.noStores": "先に設定でお店を追加してください。",
+  "shop.left": "残り{n}件",
+  "shop.exit": "終了",
+  "shop.inCart": "カゴの中",
+  "shop.done": "全部そろいました！",
+  "shop.exitTitle": "まだ{n}件残っています",
+  "shop.exitHelp": "{store}になかった場合、どうしますか？",
+  "shop.keep": "そのままにする",
+  "shop.moveTo": "{store}に移す",
+  "shop.unassign": "{store}を外す",
 
   "frequent.title": "いつもの",
   "frequent.empty": "まだありません。購入済みにした商品がここに並び、ワンタップで追加できます。",

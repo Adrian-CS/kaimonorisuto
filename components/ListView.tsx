@@ -6,6 +6,7 @@ import { useI18n } from "./I18n";
 import FrequentSheet from "./FrequentSheet";
 import MenuSheet from "./MenuSheet";
 import PhotoViewer from "./PhotoViewer";
+import Sheet from "./Sheet";
 import { dropPushSubscription } from "./PushSettings";
 import { formatMoney, type Currency } from "@/lib/money";
 import { errorText, type Key } from "@/lib/i18n";
@@ -25,6 +26,7 @@ type GroupBy = "store" | "category" | "none";
 const SIN_SUPER = "__sin_super__";
 const SIN_CATEGORIA = "__sin_categoria__";
 const NUEVA = "__nueva__";
+const EN_CARRO = "__en_carro__";
 
 type NewItem = Partial<Pick<Item, "qty" | "category" | "store_ids" | "photo_key">> & {
   name: string;
@@ -44,6 +46,11 @@ function normalizeItems(list: Item[]): Item[] {
 
 function normalizeProducts(list: Product[]): Product[] {
   return list.map((p) => (Array.isArray(p.store_ids) ? p : { ...p, store_ids: [] }));
+}
+
+/** En modo tienda: lo que tiene esa tienda entre las suyas, o no tiene ninguna. */
+function inShop(i: Item, shopId: string | undefined) {
+  return !!shopId && (i.store_ids.length === 0 || i.store_ids.includes(shopId));
 }
 
 /** Para buscar sin mayúsculas, y con ancho completo/medio igualados (ｍｉｌｋ = milk). */
@@ -110,6 +117,12 @@ export default function ListView({ initial }: { initial: Snapshot }) {
   const [products, setProducts] = useState<Product[]>(initial.products ?? []);
   const [frequentOpen, setFrequentOpen] = useState(false);
 
+  // Modo tienda: dentro del súper, solo lo de esa tienda (y lo que no tiene
+  // tienda), grande y por pasillos. Se recuerda por si se cierra la app.
+  const [shopId, setShopId] = useState<string | null>(null);
+  const [shopPicking, setShopPicking] = useState(false);
+  const [shopLeaving, setShopLeaving] = useState(false);
+
   const [groupBy, setGroupBy] = useState<GroupBy>("store");
   const [showDone, setShowDone] = useState(true);
   const [query, setQuery] = useState("");
@@ -163,6 +176,7 @@ export default function ListView({ initial }: { initial: Snapshot }) {
       if (g) setGroupBy(g);
       const d = localStorage.getItem("showDone");
       if (d !== null) setShowDone(d === "1");
+      setShopId(localStorage.getItem("shopId"));
       /* eslint-enable react-hooks/set-state-in-effect */
     } catch {
       /* modo privado: da igual */
@@ -173,10 +187,12 @@ export default function ListView({ initial }: { initial: Snapshot }) {
     try {
       localStorage.setItem("groupBy", groupBy);
       localStorage.setItem("showDone", showDone ? "1" : "0");
+      if (shopId) localStorage.setItem("shopId", shopId);
+      else localStorage.removeItem("shopId");
     } catch {
       /* ignorar */
     }
-  }, [groupBy, showDone]);
+  }, [groupBy, showDone, shopId]);
 
   /* ---------- sincronización y uso sin conexión ---------- */
 
@@ -651,6 +667,52 @@ export default function ListView({ initial }: { initial: Snapshot }) {
 
   /* eslint-enable react-hooks/purity */
 
+  /* ---------- modo tienda ---------- */
+
+  function leaveShop() {
+    // Si queda algo de esta tienda sin coger, se pregunta qué hacer con ello
+    // (lo típico: «no lo tenían»). Si no, se sale sin más.
+    if (shopPending.length) setShopLeaving(true);
+    else setShopId(null);
+  }
+
+  /** Al salir con cosas sin coger: pasarlas a otra tienda o quitarles esta. */
+  function finishShop(action: { moveTo: string } | "unassign" | "keep") {
+    const here = shopStore?.id;
+    if (here && action !== "keep")
+      for (const it of shopPending) {
+        const next =
+          action === "unassign"
+            ? it.store_ids.filter((x) => x !== here)
+            : [...new Set([...it.store_ids.filter((x) => x !== here), action.moveTo])];
+        if (JSON.stringify(next) !== JSON.stringify(it.store_ids))
+          patchItem(it.id, { store_ids: next });
+      }
+    setShopLeaving(false);
+    setShopId(null);
+  }
+
+  // En el súper la pantalla no se debe apagar con el móvil en la mano.
+  useEffect(() => {
+    if (!shopId || !("wakeLock" in navigator)) return;
+    let lock: WakeLockSentinel | null = null;
+    const acquire = async () => {
+      try {
+        lock = await navigator.wakeLock.request("screen");
+      } catch {
+        /* batería baja o el navegador no deja: no pasa nada */
+      }
+    };
+    // El sistema lo suelta al cambiar de app; se pide otra vez al volver.
+    const onVisible = () => document.visibilityState === "visible" && void acquire();
+    void acquire();
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      void lock?.release().catch(() => {});
+    };
+  }, [shopId]);
+
   /* ---------- selección y cambios en bloque ---------- */
 
   function stopSelecting() {
@@ -745,7 +807,9 @@ export default function ListView({ initial }: { initial: Snapshot }) {
         ? t("store.none")
         : label === SIN_CATEGORIA
           ? t("category.none")
-          : label,
+          : label === EN_CARRO
+            ? t("shop.inCart")
+            : label,
     [t],
   );
 
@@ -769,7 +833,37 @@ export default function ListView({ initial }: { initial: Snapshot }) {
       );
   }, [items, showDone, query, lang]);
 
+  // Si la tienda se borra (aquí o desde el otro móvil), se sale del modo.
+  const shopStore = stores.find((s) => s.id === shopId) ?? null;
+  const shopPending = items.filter((i) => !i.done && inShop(i, shopStore?.id));
+
   const groups = useMemo(() => {
+    const shop = stores.find((s) => s.id === shopId)?.id;
+    if (shop) {
+      const shopPending = items.filter((i) => !i.done && inShop(i, shop));
+      // Por categorías en el orden de la lista (el de los pasillos, si se
+      // ordenan como el súper); lo ya cogido baja al final, tachado.
+      const byOrder = (a: Item, b: Item) =>
+        a.sort_order - b.sort_order || a.name.localeCompare(b.name, lang);
+      const buckets = new Map<string, Item[]>();
+      for (const it of [...shopPending].sort(byOrder)) {
+        const label = it.category ?? SIN_CATEGORIA;
+        buckets.set(label, [...(buckets.get(label) ?? []), it]);
+      }
+      const order = [...categoryNames, SIN_CATEGORIA];
+      const pendingGroups = [...buckets.entries()]
+        .sort((a, b) => {
+          const ia = order.indexOf(a[0]);
+          const ib = order.indexOf(b[0]);
+          return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib);
+        })
+        .map(([label, list]) => ({ key: label, label, items: list }));
+      const cart = items.filter((i) => i.done && inShop(i, shop)).sort(byOrder);
+      return cart.length
+        ? [...pendingGroups, { key: EN_CARRO, label: EN_CARRO, items: cart }]
+        : pendingGroups;
+    }
+
     if (groupBy === "none")
       return [{ key: "__todo__", label: "", items: visible }];
 
@@ -811,7 +905,7 @@ export default function ListView({ initial }: { initial: Snapshot }) {
         return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib);
       })
       .map(([label, list]) => ({ key: label, label, items: list }));
-  }, [visible, groupBy, stores, categoryNames, storeNames]);
+  }, [visible, groupBy, stores, categoryNames, storeNames, shopId, items, lang]);
 
   const pending = items.filter((i) => !i.done).length;
   const doneCount = items.length - pending;
@@ -832,10 +926,12 @@ export default function ListView({ initial }: { initial: Snapshot }) {
    * debajo se recuerda dónde más está («también en Seiyu»).
    */
   const alsoIn = (it: Item, groupKey: string) => {
+    // Por tienda, el grupo es la tienda; en modo tienda, la tienda elegida.
+    const here = shopStore ? shopStore.name : groupBy === "store" ? groupKey : null;
     const names = storeNames(it.store_ids);
-    if (groupBy !== "store" || names.length < 2) return null;
-    const others = names.filter((n) => n !== groupKey);
-    return t("store.alsoIn", { names: others.join(", ") });
+    if (!here || names.length < 2) return null;
+    const others = names.filter((n) => n !== here);
+    return others.length ? t("store.alsoIn", { names: others.join(", ") }) : null;
   };
 
   /** «Mercadona · Lácteos · 2 bricks» para enseñar debajo de un producto. */
@@ -1156,58 +1252,87 @@ export default function ListView({ initial }: { initial: Snapshot }) {
           </button>
         </form>
 
-        <div className="mt-3 flex flex-wrap items-center gap-1.5 text-xs">
-          {(
-            [
-              ["store", t("group.store")],
-              ["category", t("group.category")],
-              ["none", t("group.none")],
-            ] as const
-          ).map(([id, label]) => (
+        {shopStore ? (
+          <div className="mt-3 flex items-center gap-2 rounded-xl border border-accent/40 bg-accent/10 px-3 py-2">
+            <span className="min-w-0 flex-1 truncate font-medium">🛒 {shopStore.name}</span>
+            <span className="shrink-0 text-sm text-muted tabular-nums">
+              {shopPending.length
+                ? t("shop.left", { n: shopPending.length })
+                : t("shop.done")}
+              {anyPrice && sumPending(shopPending) > 0 && (
+                <> · ~{formatMoney(sumPending(shopPending), me.currency, lang)}</>
+              )}
+            </span>
+            <button type="button" className="btn shrink-0 px-3 py-1 text-sm" onClick={leaveShop}>
+              {t("shop.exit")}
+            </button>
+          </div>
+        ) : (
+          <>
+          <div className="mt-3 flex flex-wrap items-center gap-1.5 text-xs">
+            {(
+              [
+                ["store", t("group.store")],
+                ["category", t("group.category")],
+                ["none", t("group.none")],
+              ] as const
+            ).map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setGroupBy(id)}
+                className={`shrink-0 rounded-full border px-3 py-1 ${
+                  groupBy === id
+                    ? "border-accent bg-accent/15 text-accent"
+                    : "border-border text-muted"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
             <button
-              key={id}
               type="button"
-              onClick={() => setGroupBy(id)}
-              className={`shrink-0 rounded-full border px-3 py-1 ${
-                groupBy === id
+              onClick={() => {
+                stopSelecting();
+                setShopPicking(true);
+              }}
+              className="shrink-0 rounded-full border border-border px-3 py-1 text-muted"
+            >
+              {t("shop.start")}
+            </button>
+            <button
+              type="button"
+              onClick={() => (selecting ? stopSelecting() : setSelecting(true))}
+              aria-pressed={selecting}
+              className={`ml-auto shrink-0 rounded-full border px-3 py-1 ${
+                selecting
                   ? "border-accent bg-accent/15 text-accent"
                   : "border-border text-muted"
               }`}
             >
-              {label}
+              {selecting ? t("select.done") : t("select.start")}
             </button>
-          ))}
-          <button
-            type="button"
-            onClick={() => (selecting ? stopSelecting() : setSelecting(true))}
-            aria-pressed={selecting}
-            className={`ml-auto shrink-0 rounded-full border px-3 py-1 ${
-              selecting
-                ? "border-accent bg-accent/15 text-accent"
-                : "border-border text-muted"
-            }`}
-          >
-            {selecting ? t("select.done") : t("select.start")}
-          </button>
-          <button
-            type="button"
-            onClick={() => setShowDone((v) => !v)}
-            className={`shrink-0 rounded-full border px-3 py-1 ${
-              showDone ? "border-border text-muted" : "border-accent text-accent"
-            }`}
-          >
-            {showDone ? t("list.hideDone") : t("list.onlyPending")}
-          </button>
-        </div>
+            <button
+              type="button"
+              onClick={() => setShowDone((v) => !v)}
+              className={`shrink-0 rounded-full border px-3 py-1 ${
+                showDone ? "border-border text-muted" : "border-accent text-accent"
+              }`}
+            >
+              {showDone ? t("list.hideDone") : t("list.onlyPending")}
+            </button>
+          </div>
 
-        {items.length > 12 && (
-          <input
-            className="field mt-2"
-            placeholder={t("list.search")}
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            type="search"
-          />
+          {items.length > 12 && (
+            <input
+              className="field mt-2"
+              placeholder={t("list.search")}
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              type="search"
+            />
+          )}
+          </>
         )}
       </header>
 
@@ -1249,7 +1374,7 @@ export default function ListView({ initial }: { initial: Snapshot }) {
                 ) : (
                   <span className="truncate">{groupLabel(g.label)}</span>
                 )}
-                {g.items.length > 0 && (
+                {g.items.length > 0 && g.key !== EN_CARRO && (
                   <span className="normal-case opacity-60">
                     {g.items.filter((i) => !i.done).length}/{g.items.length}
                   </span>
@@ -1275,7 +1400,12 @@ export default function ListView({ initial }: { initial: Snapshot }) {
                     } ${armed === it.id || (selecting && selected.has(it.id)) ? "bg-accent/10" : ""}`}
                   >
                     {dropIndicator(myIndex)}
-                    <div className="flex items-center gap-2 px-4 py-2.5">
+                    <div
+                      className={`flex items-center gap-2 px-4 ${
+                        // En la tienda, filas más altas para acertar con el pulgar.
+                        shopStore ? "py-4 text-lg" : "py-2.5"
+                      }`}
+                    >
                       <button
                         type="button"
                         onClick={() => {
@@ -1397,15 +1527,17 @@ export default function ListView({ initial }: { initial: Snapshot }) {
                             ✎
                           </button>
 
-                          <span
-                            role="button"
-                            tabIndex={0}
-                            aria-label={t("drag.handle", { name: it.name })}
-                            onPointerDown={(e) => startDrag(e, it.id, g.key)}
-                            className="shrink-0 cursor-grab touch-none px-1 py-1 text-lg leading-none text-muted select-none"
-                          >
-                            ⠿
-                          </span>
+                          {!shopStore && (
+                            <span
+                              role="button"
+                              tabIndex={0}
+                              aria-label={t("drag.handle", { name: it.name })}
+                              onPointerDown={(e) => startDrag(e, it.id, g.key)}
+                              className="shrink-0 cursor-grab touch-none px-1 py-1 text-lg leading-none text-muted select-none"
+                            >
+                              ⠿
+                            </span>
+                          )}
                         </>
                       )}
                     </div>
@@ -1515,6 +1647,72 @@ export default function ListView({ initial }: { initial: Snapshot }) {
           onNotify={() => notifyAbout(editing.id)}
           offline={offline}
         />
+      )}
+
+      {shopPicking && (
+        <Sheet title={t("shop.pick")} onClose={() => setShopPicking(false)}>
+          {stores.length === 0 ? (
+            <p className="py-4 text-center text-sm text-muted">{t("shop.noStores")}</p>
+          ) : (
+            <div className="flex flex-col gap-2">
+              {stores.map((st) => (
+                <button
+                  key={st.id}
+                  type="button"
+                  className="btn justify-start py-3 text-left text-base"
+                  onClick={() => {
+                    setShopId(st.id);
+                    setShopPicking(false);
+                    window.scrollTo({ top: 0 });
+                  }}
+                >
+                  🛒 {st.name}
+                  <span className="ml-auto text-sm text-muted">
+                    {items.filter((i) => !i.done && i.store_ids.includes(st.id)).length || ""}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+        </Sheet>
+      )}
+
+      {shopLeaving && shopStore && (
+        <Sheet
+          title={t("shop.exitTitle", { n: shopPending.length })}
+          onClose={() => setShopLeaving(false)}
+        >
+          <p className="mb-3 text-sm text-muted">
+            {t("shop.exitHelp", { store: shopStore.name })}
+          </p>
+          <ul className="mb-4 flex flex-wrap gap-1.5">
+            {shopPending.map((i) => (
+              <li key={i.id} className="rounded-full bg-surface-2 px-3 py-1 text-sm">
+                {i.name}
+              </li>
+            ))}
+          </ul>
+          <div className="flex flex-col gap-2">
+            {stores
+              .filter((st) => st.id !== shopStore.id)
+              .map((st) => (
+                <button
+                  key={st.id}
+                  type="button"
+                  className="btn"
+                  onClick={() => finishShop({ moveTo: st.id })}
+                >
+                  {t("shop.moveTo", { store: st.name })}
+                </button>
+              ))}
+            <button type="button" className="btn" onClick={() => finishShop("unassign")}>
+              {t("shop.unassign", { store: shopStore.name })}
+            </button>
+            <button type="button" className="btn btn-primary" onClick={() => finishShop("keep")}>
+              {t("shop.keep")}
+            </button>
+          </div>
+        </Sheet>
       )}
 
       {frequentOpen && (

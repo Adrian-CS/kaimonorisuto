@@ -15,6 +15,8 @@ Todo lo demás es opcional: se puede usar escribiendo solo el nombre.
   de categoría.
 - **Categorías como las tiendas**: se crean una vez en Ajustes (o con el «+» de
   la ficha) y luego se eligen de una lista.
+- **Modo tienda**: dentro del súper, solo lo de esa tienda, grande y por
+  pasillos, sin que se apague la pantalla.
 - **Varias tiendas por artículo**: «leche, en Mercadona o en Seiyu». Sale en
   cada una al agrupar por tienda y se marca una sola vez.
 - **Lo de siempre**: lo que habéis comprado otras veces se sugiere al escribir
@@ -223,6 +225,25 @@ Como un artículo puede estar en varias tiendas, soltarlo en otra **le añade**
 esa tienda (sigue en las que tenía); soltarlo en «Sin supermercado» se las
 quita todas. Para quitarle solo una, desde la ficha.
 Los grupos vacíos se pintan en gris justo para poder soltar ahí.
+
+## Modo tienda
+
+«🛒 En la tienda» (en la fila de filtros) pregunta en qué tienda estás y cambia
+la lista:
+
+- Solo sale lo **pendiente de esa tienda** y lo que **no tiene tienda** (puede
+  estar ahí). Lo que es solo de otras tiendas no aparece.
+- Agrupado **por categorías, en el orden de Ajustes**: si ordenas las categorías
+  como los pasillos del súper, la lista va en el orden en que los recorres.
+- Filas más altas, sin el tirador de arrastrar. Lo que marcas baja a **«En el
+  carro»**, tachado; se puede desmarcar.
+- Arriba, cuánto queda y el total aproximado de lo que queda.
+- La pantalla **no se apaga** mientras estás en modo tienda (Wake Lock, en los
+  navegadores que lo permiten).
+- Se recuerda en el móvil: si cierras la app en mitad de la compra, al abrirla
+  sigues en la tienda.
+- **Al salir**, si quedan cosas sin coger (lo típico: no las tenían), pregunta
+  qué hacer: pasarlas a otra tienda, quitarles esta, o dejarlas como están.
 
 ## Varias tiendas por artículo
 

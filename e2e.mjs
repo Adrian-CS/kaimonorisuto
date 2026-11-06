@@ -36,6 +36,10 @@ const S = {
     settings: "Ajustes",
     storeName: "Nombre del supermercado",
     alsoIn: (n) => `también en ${n}`,
+    shopStart: "🛒 En la tienda",
+    shopExit: "Salir",
+    inCart: "En el carro",
+    shopUnassign: (n) => `Quitarles ${n}`,
     frequent: "Lo de siempre",
     frequentPick: (n) => `Elegir ${n}`,
     frequentAdd: /^Añadir \(/,
@@ -97,6 +101,10 @@ const S = {
     settings: "設定",
     storeName: "お店の名前",
     alsoIn: (n) => `${n}にもあります`,
+    shopStart: "🛒 買い物中",
+    shopExit: "終了",
+    inCart: "カゴの中",
+    shopUnassign: (n) => `${n}を外す`,
     frequent: "いつもの",
     frequentPick: (n) => `${n}を選択`,
     frequentAdd: /^追加（/,
@@ -1040,6 +1048,51 @@ async function run(browser, lang, s) {
     if ((await snapshot()).products.some((x) => x.name === "Yogur"))
       throw new Error("Yogur sigue en el histórico");
     await page.request.delete(`${BASE}/api/items/${y.id}`);
+  });
+
+  await step("modo tienda: solo lo de esa tienda, y lo cogido al final", async () => {
+    let snap = await snapshot();
+    const [a, b] = [s.storeA, s.storeB].map((n) => snap.stores.find((x) => x.name === n).id);
+    // Un artículo solo de B (no debe salir en A), uno de A y B (sí), y los
+    // que no tienen tienda (también, pueden estar en cualquiera).
+    const only = (name) => snap.items.find((x) => x.name === name);
+    await page.request.patch(`${BASE}/api/items/${only("Fanta limón").id}`, { data: { store_ids: [b], done: 0 } });
+    await page.request.patch(`${BASE}/api/items/${only("Sprite").id}`, { data: { store_ids: [a, b], done: 0 } });
+    const [nut] = await pendingNamed("Nutella");
+    await page.request.patch(`${BASE}/api/items/${nut.id}`, { data: { store_ids: [a] } });
+
+    await page.reload({ waitUntil: "networkidle" });
+    await page.getByRole("button", { name: s.shopStart }).click();
+    await page.locator("[data-sheet-panel]").getByRole("button", { name: s.storeA }).click();
+    await page.getByRole("button", { name: s.shopExit, exact: true }).waitFor();
+    const names = await page.locator("main ul li").allTextContents();
+    const has = (n) => names.some((t) => t.includes(n));
+    if (!has("Nutella") || !has("Sprite") || !has("人参")) throw new Error(`faltan: ${names}`);
+    if (has("Fanta limón")) throw new Error("sale algo que solo es de otra tienda");
+
+    // Marcar algo lo baja a «En el carro».
+    await page.locator("main ul li", { hasText: "Nutella" }).locator("button").first().click();
+    await page.getByText(s.inCart, { exact: true }).waitFor();
+    await page.screenshot({ path: `${SHOTS}/${lang}-12-modo-tienda.png` });
+
+    // Sigue en modo tienda tras recargar.
+    await page.reload({ waitUntil: "networkidle" });
+    await page.getByRole("button", { name: s.shopExit, exact: true }).waitFor();
+
+    // Al salir con cosas sin coger: quitarles esta tienda.
+    await page.getByRole("button", { name: s.shopExit, exact: true }).click();
+    await page.screenshot({ path: `${SHOTS}/${lang}-13-salir-tienda.png` });
+    await page.getByRole("button", { name: s.shopUnassign(s.storeA) }).click();
+    await page.waitForTimeout(1200);
+    snap = await snapshot();
+    const sprite = snap.items.find((x) => x.name === "Sprite");
+    if (JSON.stringify(sprite.store_ids) !== JSON.stringify([b]))
+      throw new Error(`Sprite: ${JSON.stringify(sprite.store_ids)}`);
+    if (await page.getByRole("button", { name: s.shopExit, exact: true }).count())
+      throw new Error("no ha salido del modo tienda");
+    // Lo cogido no se toca.
+    if (JSON.stringify(snap.items.find((x) => x.id === nut.id).store_ids) !== JSON.stringify([a]))
+      throw new Error("ha tocado lo que ya estaba en el carro");
   });
 
   await step("una tienda que no es del hogar no rompe el cambio", async () => {
