@@ -48,6 +48,9 @@ export default function ItemSheet({
   onNotify: () => Promise<{ sent: number; reason?: string }>;
 }) {
   const { t, lang } = useI18n();
+  // Cómo estaba el artículo al abrir la ficha (el `item` de las props se
+  // actualiza con el polling mientras está abierta).
+  const [opened] = useState(item);
   const [name, setName] = useState(item.name);
   const [price, setPrice] = useState(moneyToInput(item.price, currency));
   // Precio recordado para el nombre y la tienda con que se pidió: solo se
@@ -89,8 +92,9 @@ export default function ItemSheet({
     const timer = setTimeout(async () => {
       try {
         const res = await fetch(`/api/prices?${query}`, { cache: "no-store" });
-        const data = (await res.json()) as { price: number | null };
-        setSuggestion({ query, price: data.price });
+        if (!res.ok) return;
+        const data = (await res.json()) as { price?: number | null };
+        setSuggestion({ query, price: typeof data.price === "number" ? data.price : null });
       } catch {
         /* sin conexión: sin sugerencia */
       }
@@ -181,7 +185,10 @@ export default function ItemSheet({
       return;
     }
 
-    onSave({
+    // Solo lo que ha cambiado desde que se abrió la ficha: si el cambio sale
+    // más tarde desde la cola, no pisa lo que la otra persona haya tocado
+    // mientras en otros campos del mismo artículo.
+    const next: ItemPatch = {
       name: name.trim(),
       price: parsedPrice,
       qty: qty.trim() || null,
@@ -189,7 +196,11 @@ export default function ItemSheet({
       note: note.trim() || null,
       store_id: storeId || null,
       photo_key: photoKey,
-    });
+    };
+    const patch: ItemPatch = {};
+    for (const k of Object.keys(next) as (keyof ItemPatch)[])
+      if (next[k] !== opened[k]) Object.assign(patch, { [k]: next[k] });
+    if (Object.keys(patch).length) onSave(patch);
     close(photoKey);
   }
 

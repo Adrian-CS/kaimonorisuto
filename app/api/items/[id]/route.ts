@@ -2,13 +2,13 @@ import { requireMe } from "@/lib/auth";
 import { fail, handler, json, opt } from "@/lib/api";
 import { getDb, now } from "@/lib/db";
 import { deletePhotoIfUnused } from "@/lib/photos";
-import { ensureCategory, rememberPrice } from "@/lib/queries";
+import { ensureCategory, ownPhotoKey, ownStoreId, rememberPrice } from "@/lib/queries";
 
 export const dynamic = "force-dynamic";
 
 type Ctx = { params: Promise<{ id: string }> };
 
-const OPTIONAL_FIELDS = ["qty", "note", "store_id", "photo_key"] as const;
+const OPTIONAL_FIELDS = ["qty", "note"] as const;
 
 export const PATCH = handler(async (req: Request, ctx: Ctx) => {
   const me = await requireMe();
@@ -29,6 +29,14 @@ export const PATCH = handler(async (req: Request, ctx: Ctx) => {
       sets.push(`${f} = ?`);
       values.push(opt(body[f]));
     }
+  }
+  if ("store_id" in body) {
+    sets.push("store_id = ?");
+    values.push(await ownStoreId(me.householdId, body.store_id));
+  }
+  if ("photo_key" in body) {
+    sets.push("photo_key = ?");
+    values.push(ownPhotoKey(me.householdId, body.photo_key));
   }
   if ("category" in body) {
     // Una categoría nueva escrita aquí también entra en la lista del hogar.
@@ -74,7 +82,7 @@ export const PATCH = handler(async (req: Request, ctx: Ctx) => {
 
   if (!res.meta.changes) return fail("not_found", 404);
 
-  if (before?.photo_key && before.photo_key !== opt(body.photo_key))
+  if (before?.photo_key && before.photo_key !== ownPhotoKey(me.householdId, body.photo_key))
     await deletePhotoIfUnused(me.householdId, before.photo_key);
 
   // Recuerda el precio para la próxima vez que se añada este producto.

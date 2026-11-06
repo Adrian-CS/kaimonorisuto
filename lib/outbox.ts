@@ -38,6 +38,8 @@ export class Outbox {
   private listeners = new Set<Listener>();
   /** true si el último intento de envío falló por la red. */
   offline = false;
+  /** true si el servidor dijo que la sesión ya no vale (401). */
+  unauthorized = false;
 
   constructor(private householdId: string) {
     this.ops = read(storageKey(householdId));
@@ -92,9 +94,11 @@ export class Outbox {
 
         // Sesión caducada: no se tira nada; saldrá al volver a entrar.
         if (res.status === 401) {
+          this.unauthorized = true;
           for (const pending of this.ops) this.settle(pending.key, { status: "queued" });
           return;
         }
+        this.unauthorized = false;
         // Error del servidor: se reintenta un número limitado de veces para
         // que un cambio roto no bloquee la cola para siempre.
         if (res.status >= 500 && (op.tries ?? 0) + 1 < MAX_TRIES) {

@@ -16,14 +16,28 @@ export const POST = handler(async (req: Request) => {
   if (!ALLOWED.has(file.type)) return fail("photo_type");
   if (file.size > MAX_BYTES) return fail("photo_large");
 
-  const ext =
-    file.type === "image/png" ? "png" : file.type === "image/webp" ? "webp" : "jpg";
+  // El tipo lo declara el navegador; se comprueba también por los primeros
+  // bytes, para no guardar (y luego servir) algo que no es una imagen.
+  const bytes = await file.arrayBuffer();
+  const type = sniffImage(new Uint8Array(bytes.slice(0, 12)));
+  if (!type || !ALLOWED.has(type)) return fail("photo_type");
+
+  const ext = type === "image/png" ? "png" : type === "image/webp" ? "webp" : "jpg";
   const key = `${PHOTO_PREFIX}/${me.householdId}/${newId()}.${ext}`;
 
   const env = await getEnv();
-  await env.PHOTOS.put(key, await file.arrayBuffer(), {
-    httpMetadata: { contentType: file.type },
+  await env.PHOTOS.put(key, bytes, {
+    httpMetadata: { contentType: type },
   });
 
   return json({ key });
 });
+
+/** Tipo real de la imagen según su firma (JPEG, PNG o WebP), o null. */
+function sniffImage(b: Uint8Array): string | null {
+  if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return "image/jpeg";
+  if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return "image/png";
+  const ascii = (from: number, to: number) => String.fromCharCode(...b.slice(from, to));
+  if (ascii(0, 4) === "RIFF" && ascii(8, 12) === "WEBP") return "image/webp";
+  return null;
+}

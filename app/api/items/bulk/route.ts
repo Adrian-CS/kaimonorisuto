@@ -1,7 +1,7 @@
 import { requireMe } from "@/lib/auth";
 import { fail, handler, json, opt } from "@/lib/api";
 import { getDb, now } from "@/lib/db";
-import { ensureCategory } from "@/lib/queries";
+import { ensureCategory, ownStoreId } from "@/lib/queries";
 
 export const dynamic = "force-dynamic";
 
@@ -27,7 +27,7 @@ export const PATCH = handler(async (req: Request) => {
   }
   if ("store_id" in body) {
     sets.push("store_id = ?");
-    values.push(opt(body.store_id));
+    values.push(await ownStoreId(me.householdId, body.store_id));
   }
   if (!sets.length) return fail("nothing_to_update");
 

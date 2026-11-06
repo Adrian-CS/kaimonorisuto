@@ -67,14 +67,24 @@ export default function PushSettings() {
         const reg = await navigator.serviceWorker.getRegistration();
         const sub = (await reg?.pushManager.getSubscription()) ?? null;
         // Una suscripción con la clave equivocada no vale: pedimos volver a activar.
-        setSubscribed(
-          Boolean(sub && data?.publicKey && matchesKey(sub, data.publicKey)),
-        );
+        const valid = Boolean(sub && data?.publicKey && matchesKey(sub, data.publicKey));
+        // Si vale, se vuelve a registrar en el servidor: así queda a nombre de
+        // quien tiene la sesión abierta ahora (no de quien la activó en este
+        // navegador antes) y con el idioma actual de la app.
+        if (valid && sub) {
+          await fetch("/api/push", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ...sub.toJSON(), lang }),
+          });
+          await refresh();
+        }
+        setSubscribed(valid);
       } catch {
         setSubscribed(false);
       }
     })();
-  }, [supported, refresh]);
+  }, [supported, refresh, lang]);
 
   async function enable() {
     if (!info?.publicKey) return;
@@ -198,4 +208,24 @@ export default function PushSettings() {
       )}
     </section>
   );
+}
+
+/**
+ * Al cerrar sesión: este navegador deja de recibir avisos de la lista (que
+ * llevan nombres de artículos y de la otra persona).
+ */
+export async function dropPushSubscription() {
+  try {
+    const reg = await navigator.serviceWorker?.getRegistration();
+    const sub = await reg?.pushManager.getSubscription();
+    if (!sub) return;
+    await fetch("/api/push", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ endpoint: sub.endpoint }),
+    }).catch(() => {});
+    await sub.unsubscribe();
+  } catch {
+    /* sin service worker o sin permisos: nada que dar de baja */
+  }
 }

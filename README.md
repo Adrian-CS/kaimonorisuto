@@ -139,8 +139,14 @@ En el súper no siempre hay cobertura, así que la app funciona sin red:
   sugerencia de precio recordado. Los avisos a la otra persona se mandan al
   volver la conexión.
 - Si los dos cambiáis lo mismo sin conexión, gana el último que se sincroniza.
-- Al **cerrar sesión** se borran la copia local, la cola y la caché. Si quedan
-  cambios sin enviar, la app avisa antes.
+- La ficha de un artículo manda **solo los campos que cambiaste**, y «Borrar
+  los comprados» manda los ids que veías: si la cola sale tarde, no pisa ni
+  borra lo que la otra persona haya hecho mientras.
+- Si la **sesión caduca**, la app lleva a «Entrar»; la cola se queda en el
+  móvil y sale sola después del login.
+- Al **cerrar sesión** se borran la copia local, la cola y la caché, y se da de
+  baja este navegador de las notificaciones. Si quedan cambios sin enviar, la
+  app avisa antes.
 
 ## Precio orientativo
 
@@ -242,11 +248,25 @@ Todos los campos opcionales de un artículo (`qty`, `category`, `note`,
 `store_id`, `photo_key`, `price`) son `NULL` por defecto; el editor los esconde hasta que
 pulsas «+ Cantidad, categoría y nota».
 
+### Intentos de entrar
+
+`lib/ratelimit.ts` cuenta los **fallos** (tabla `auth_failures`, migración
+0005): tras 10 contraseñas mal en una cuenta o 30 desde la misma IP en 15
+minutos, el login responde 429 hasta que pase ese rato; igual con 20 códigos
+de invitación inválidos por IP. Entrar bien borra los fallos de esa cuenta.
+Quien conozca tu email podría bloquearte la cuenta 15 minutos a propósito; para
+una lista de la compra es un precio razonable.
+
+Las sesiones caducadas se borran de la base cada vez que alguien inicia sesión.
+
 ### Seguridad de las fotos
 
 La clave en R2 es `lista-compra/{household_id}/{uuid}.jpg` y la ruta que las
 sirve comprueba que el prefijo coincide con el hogar de la sesión, así que una
-casa no puede leer las fotos de otra. Verificado en `e2e.mjs`.
+casa no puede leer las fotos de otra. Verificado en `e2e.mjs`. Al subir, el
+tipo se comprueba por los primeros bytes (JPEG, PNG o WebP), no por lo que
+diga el navegador, y se sirven con `X-Content-Type-Options: nosniff`. Un
+artículo solo puede apuntar a fotos y tiendas de su propio hogar.
 
 ## Desplegar (ya tienes cuenta y otro proyecto en Cloudflare)
 
@@ -348,8 +368,8 @@ npm run preview      # build de OpenNext + wrangler dev en :8787
 
 ## Tests end-to-end
 
-`e2e.mjs` recorre con Playwright el flujo completo **en los dos idiomas** (42
-pasos en cada uno): detección de idioma por `Accept-Language`, registro, alta de
+`e2e.mjs` recorre con Playwright el flujo completo **en los dos idiomas** (unos
+45 pasos en cada uno): detección de idioma por `Accept-Language`, registro, alta de
 artículos, marcar comprado, supermercados y categorías, subida y servido de la
 foto desde R2 (y su limpieza), visor de fotos, precio y totales, precio recordado
 al volver a añadir, cambio de moneda, arrastrar entre grupos, cambios en bloque,

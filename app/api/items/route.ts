@@ -1,7 +1,7 @@
 import { requireMe } from "@/lib/auth";
 import { clientId, fail, handler, json, opt } from "@/lib/api";
 import { getDb, newId, now } from "@/lib/db";
-import { ensureCategory, recallPrice } from "@/lib/queries";
+import { ensureCategory, ownPhotoKey, ownStoreId, recallPrice } from "@/lib/queries";
 import { notifyHousehold } from "@/lib/notify";
 import { sweepOrphanPhotos } from "@/lib/photos";
 
@@ -24,7 +24,7 @@ export const POST = handler(async (req: Request) => {
     .bind(id, me.householdId)
     .first<{ price: number | null }>();
   if (existing) return json({ id, price: existing.price });
-  const storeId = opt(body.store_id);
+  const storeId = await ownStoreId(me.householdId, opt(body.store_id));
   const rawCategory = opt(body.category);
   const category = rawCategory
     ? (await ensureCategory(me.householdId, rawCategory)).name
@@ -57,7 +57,7 @@ export const POST = handler(async (req: Request) => {
       category,
       opt(body.note),
       storeId,
-      opt(body.photo_key),
+      ownPhotoKey(me.householdId, body.photo_key),
       price,
       sortOrder,
       t,
@@ -82,13 +82,26 @@ export const POST = handler(async (req: Request) => {
  * Borra en bloque todos los artículos ya comprados, y de paso barre las fotos
  * que se hayan quedado sin artículo.
  */
-export const DELETE = handler(async () => {
+export const DELETE = handler(async (req: Request) => {
   const me = await requireMe();
+  const body = (await req.json().catch(() => ({}))) as { ids?: unknown };
   const db = await getDb();
-  await db
-    .prepare("DELETE FROM items WHERE household_id = ? AND done = 1")
-    .bind(me.householdId)
-    .run();
+
+  // Con `ids`, solo esos (los que veía como comprados quien pulsó el botón):
+  // si el borrado llega tarde desde la cola, no se lleva lo que se haya
+  // marcado mientras. Sin `ids` (clientes antiguos), todos los comprados.
+  if (Array.isArray(body.ids)) {
+    const ids = body.ids.filter((x): x is string => typeof x === "string").slice(0, 1000);
+    const stmt = db.prepare(
+      "DELETE FROM items WHERE id = ? AND household_id = ? AND done = 1",
+    );
+    if (ids.length) await db.batch(ids.map((id) => stmt.bind(id, me.householdId)));
+  } else {
+    await db
+      .prepare("DELETE FROM items WHERE household_id = ? AND done = 1")
+      .bind(me.householdId)
+      .run();
+  }
   await sweepOrphanPhotos(me.householdId);
   return json({ ok: true });
 });

@@ -30,7 +30,11 @@ export const POST = handler(async (req: Request) => {
     .first();
   if (existing) return fail("email_taken");
 
+  // Hogar nuevo (si no hay código) y usuario van en un solo batch: si dos
+  // altas con el mismo email llegan a la vez, la segunda falla entera por el
+  // UNIQUE y no deja un hogar huérfano.
   let householdId: string;
+  const stmts = [];
 
   if (inviteCode) {
     // Los códigos son cortos: sin límite se podrían ir probando hasta dar
@@ -49,21 +53,29 @@ export const POST = handler(async (req: Request) => {
   } else {
     householdId = newId();
     const householdName = body.householdName?.trim() || `Casa de ${name}`;
-    await db
-      .prepare(
-        "INSERT INTO households (id, name, invite_code, created_at) VALUES (?, ?, ?, ?)",
-      )
-      .bind(householdId, householdName, newCode(), t)
-      .run();
+    stmts.push(
+      db
+        .prepare(
+          "INSERT INTO households (id, name, invite_code, created_at) VALUES (?, ?, ?, ?)",
+        )
+        .bind(householdId, householdName, newCode(), t),
+    );
   }
 
   const userId = newId();
-  await db
-    .prepare(
-      "INSERT INTO users (id, household_id, name, email, password_hash, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-    )
-    .bind(userId, householdId, name, email, await hashPassword(password), t)
-    .run();
+  stmts.push(
+    db
+      .prepare(
+        "INSERT INTO users (id, household_id, name, email, password_hash, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+      )
+      .bind(userId, householdId, name, email, await hashPassword(password), t),
+  );
+  try {
+    await db.batch(stmts);
+  } catch (err) {
+    if (String(err).includes("UNIQUE")) return fail("email_taken");
+    throw err;
+  }
 
   await createSession(userId);
   return json({ ok: true });

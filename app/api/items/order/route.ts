@@ -1,6 +1,7 @@
 import { requireMe } from "@/lib/auth";
 import { fail, handler, json, opt } from "@/lib/api";
 import { getDb, now } from "@/lib/db";
+import { ownStoreId } from "@/lib/queries";
 
 export const dynamic = "force-dynamic";
 
@@ -25,13 +26,13 @@ export const PATCH = handler(async (req: Request) => {
   const db = await getDb();
   const t = now();
 
-  await db.batch(
-    moves.map((m) => {
+  const stmts = await Promise.all(
+    moves.map(async (m) => {
       const sets = ["sort_order = ?", "updated_at = ?"];
       const values: (string | number | null)[] = [Number(m.sort_order) || 0, t];
       if ("store_id" in m) {
         sets.push("store_id = ?");
-        values.push(m.store_id || null);
+        values.push(await ownStoreId(me.householdId, m.store_id));
       }
       if ("category" in m) {
         // Solo se puede soltar en un grupo que ya existe, así que no hace
@@ -46,6 +47,7 @@ export const PATCH = handler(async (req: Request) => {
         .bind(...values, m.id, me.householdId);
     }),
   );
+  await db.batch(stmts);
 
   return json({ ok: true });
 });

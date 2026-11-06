@@ -24,6 +24,8 @@ export const GET = handler(async (_req: Request, ctx: Ctx) => {
     headers: {
       "Content-Type": obj.httpMetadata?.contentType ?? "image/jpeg",
       "Cache-Control": "private, max-age=31536000, immutable",
+      // Que el navegador no intente adivinar otro tipo distinto del declarado.
+      "X-Content-Type-Options": "nosniff",
       ETag: obj.httpEtag,
     },
   });

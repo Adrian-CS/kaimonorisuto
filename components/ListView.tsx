@@ -5,6 +5,7 @@ import ItemSheet, { type ItemPatch } from "./ItemSheet";
 import { useI18n } from "./I18n";
 import MenuSheet from "./MenuSheet";
 import PhotoViewer from "./PhotoViewer";
+import { dropPushSubscription } from "./PushSettings";
 import { formatMoney, type Currency } from "@/lib/money";
 import { errorText, type Key } from "@/lib/i18n";
 import { sameName } from "@/lib/names";
@@ -56,6 +57,13 @@ async function registerServiceWorker() {
   } catch {
     /* sin service worker: la app funciona igual, solo que no sin conexión */
   }
+}
+
+/** Sesión caducada: a la pantalla de entrar, recordando volver aquí. */
+function goToLogin() {
+  // Recarga completa: la cola y la copia local se quedan en el móvil.
+  // eslint-disable-next-line @next/next/no-location-assign-relative-destination
+  if (location.pathname !== "/login") window.location.href = "/login";
 }
 
 /** Bandas verticales medidas al empezar a arrastrar. */
@@ -153,6 +161,7 @@ export default function ListView({ initial }: { initial: Snapshot }) {
   const [pendingOps, setPendingOps] = useState(0);
   const [netDown, setNetDown] = useState(false);
   const householdId = initial.me.householdId;
+  const servedAt = useRef(initial.servedAt ?? 0);
 
   const send = useCallback(
     (op: Omit<Op, "key">): Promise<SendResult> =>
@@ -162,17 +171,19 @@ export default function ListView({ initial }: { initial: Snapshot }) {
   const json = (method: Op["method"], url: string, body?: unknown) =>
     send({ method, url, body });
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (force = false) => {
     // Con cambios por mandar, lo del servidor está desfasado respecto a la
     // pantalla: primero se vacía la cola y luego se refresca.
     if (outbox.current?.size) return;
-    if (Date.now() - dirty.current < 1500) return;
+    if (!force && Date.now() - dirty.current < 1500) return;
     try {
       const res = await fetch("/api/snapshot", { cache: "no-store" });
       setNetDown(false);
+      if (res.status === 401) return goToLogin();
       if (!res.ok) return;
       const data = (await res.json()) as Snapshot;
-      if (outbox.current?.size || Date.now() - dirty.current < 1500) return;
+      if (outbox.current?.size || (!force && Date.now() - dirty.current < 1500))
+        return;
       setMe(data.me);
       setStores(data.stores);
       setCategories(data.categories ?? []);
@@ -190,13 +201,11 @@ export default function ListView({ initial }: { initial: Snapshot }) {
     // puede venir de la caché del service worker al abrir sin conexión), o
     // quedan cambios sin mandar, manda la copia local.
     const cached = loadSnapshot<Snapshot>(householdId);
-    if (cached && (ob.size > 0 || cached.at > (initial.servedAt ?? 0))) {
-      /* eslint-disable react-hooks/set-state-in-effect -- localStorage solo existe tras montar */
+    if (cached && (ob.size > 0 || cached.at > servedAt.current)) {
       setMe(cached.data.me);
       setStores(cached.data.stores);
       setCategories(cached.data.categories ?? []);
       setItems(cached.data.items);
-      /* eslint-enable react-hooks/set-state-in-effect */
     }
 
     let wasPending = ob.size > 0;
@@ -204,17 +213,17 @@ export default function ListView({ initial }: { initial: Snapshot }) {
       setPendingOps(ob.size);
       setNetDown(ob.offline);
       // Al vaciarse la cola, se trae lo que haya cambiado la otra persona.
-      if (wasPending && ob.size === 0) {
-        dirty.current = 0;
-        void refresh();
-      }
+      if (wasPending && ob.size === 0) void refresh(true);
+      // Sesión caducada: a volver a entrar. La cola sigue en el móvil y sale
+      // sola después del login.
+      if (ob.unauthorized) goToLogin();
       wasPending = ob.size > 0;
     };
     const unsubscribe = ob.subscribe(sync);
     sync();
     void ob.flush();
 
-    const online = () => void ob.flush().then(refresh);
+    const online = () => void ob.flush().then(() => refresh());
     const offline = () => setNetDown(true);
     window.addEventListener("online", online);
     window.addEventListener("offline", offline);
@@ -226,7 +235,10 @@ export default function ListView({ initial }: { initial: Snapshot }) {
       window.removeEventListener("online", online);
       window.removeEventListener("offline", offline);
     };
-  }, [householdId, initial.servedAt, refresh]);
+    // Solo depende del hogar: cambiar de idioma refresca la página (nuevo
+    // servedAt) y no debe crear una segunda cola sobre el mismo almacenamiento.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [householdId]);
 
   // Copia local de la lista, para abrirla sin conexión.
   useEffect(() => {
@@ -399,25 +411,29 @@ export default function ListView({ initial }: { initial: Snapshot }) {
     setItems((prev) =>
       prev.map((i) => (i.id === id ? { ...i, ...patch, updated_at: Date.now() } : i)),
     );
-    void json("PATCH", `/api/items/${id}`, patch).then(touch);
+    void json("PATCH", `/api/items/${id}`, patch);
   }
 
   function deleteItem(id: string) {
     touch();
     setItems((prev) => prev.filter((i) => i.id !== id));
-    void json("DELETE", `/api/items/${id}`).then(touch);
+    void json("DELETE", `/api/items/${id}`);
   }
 
   function clearDone() {
+    // Se mandan los ids que se ven ahora como comprados: si la cola sale más
+    // tarde, no se lleva por delante lo que la otra persona marque mientras.
+    const ids = items.filter((i) => i.done).map((i) => i.id);
+    if (!ids.length) return;
     touch();
     setItems((prev) => prev.filter((i) => !i.done));
-    void json("DELETE", "/api/items").then(touch);
+    void json("DELETE", "/api/items", { ids });
   }
 
   function setCurrency(currency: Currency) {
     touch();
     setMe((prev) => ({ ...prev, currency }));
-    void json("PATCH", "/api/household", { currency }).then(touch);
+    void json("PATCH", "/api/household", { currency });
   }
 
   /** Crea una tienda (o reutiliza la que ya se llame así) y devuelve su id. */
@@ -446,7 +462,7 @@ export default function ListView({ initial }: { initial: Snapshot }) {
   function renameStore(id: string, name: string) {
     touch();
     setStores((prev) => prev.map((s) => (s.id === id ? { ...s, name } : s)));
-    void json("PATCH", `/api/stores/${id}`, { name }).then(touch);
+    void json("PATCH", `/api/stores/${id}`, { name });
   }
 
   function deleteStore(id: string) {
@@ -455,7 +471,7 @@ export default function ListView({ initial }: { initial: Snapshot }) {
     setItems((prev) =>
       prev.map((i) => (i.store_id === id ? { ...i, store_id: null } : i)),
     );
-    void json("DELETE", `/api/stores/${id}`).then(touch);
+    void json("DELETE", `/api/stores/${id}`);
   }
 
   function moveStore(id: string, dir: -1 | 1) {
@@ -529,7 +545,7 @@ export default function ListView({ initial }: { initial: Snapshot }) {
     setItems((prev) =>
       prev.map((i) => (i.category === old ? { ...i, category: null } : i)),
     );
-    void json("DELETE", `/api/categories/${id}`).then(touch);
+    void json("DELETE", `/api/categories/${id}`);
   }
 
   function moveCategory(id: string, dir: -1 | 1) {
@@ -548,6 +564,7 @@ export default function ListView({ initial }: { initial: Snapshot }) {
     )
       return;
     outbox.current?.clear();
+    await dropPushSubscription(); // antes de cerrar la sesión: la baja la necesita
     await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
     await forgetLocalData();
     // Recarga completa a propósito: así no queda nada de la sesión en memoria.
@@ -589,7 +606,7 @@ export default function ListView({ initial }: { initial: Snapshot }) {
       ),
     );
     setBulkMsg(t("select.applied", { n: ids.length }));
-    void json("PATCH", "/api/items/bulk", { ids, ...patch }).then(touch);
+    void json("PATCH", "/api/items/bulk", { ids, ...patch });
   }
 
   function bulkCategory(value: string) {
@@ -786,7 +803,7 @@ export default function ListView({ initial }: { initial: Snapshot }) {
     );
   }
 
-  async function endDrag() {
+  function endDrag() {
     const id = dragId;
     const target = dropAt;
     setDragId(null);
@@ -823,23 +840,26 @@ export default function ListView({ initial }: { initial: Snapshot }) {
       }),
     );
 
-    await fetch("/api/items/order", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        moves: without.map((x, i) =>
-          x !== id
-            ? { id: x, sort_order: i }
-            : {
-                id: x,
-                sort_order: i,
-                ...(newStoreId !== undefined && { store_id: newStoreId }),
-                ...(newCategory !== undefined && { category: newCategory }),
-              },
-        ),
-      }),
+    // Por la cola, como todo: sin conexión el nuevo orden también se guarda.
+    void json("PATCH", "/api/items/order", {
+      moves: without.map((x, i) =>
+        x !== id
+          ? { id: x, sort_order: i }
+          : {
+              id: x,
+              sort_order: i,
+              ...(newStoreId !== undefined && { store_id: newStoreId }),
+              ...(newCategory !== undefined && { category: newCategory }),
+            },
+      ),
     });
-    touch();
+  }
+
+  /** Gesto interrumpido por el sistema (llamada, scroll…): no se guarda nada. */
+  function cancelDrag() {
+    setDragId(null);
+    setDropAt(null);
+    bands.current = [];
   }
 
   const draggedItem = dragId ? items.find((i) => i.id === dragId) : null;
@@ -863,7 +883,7 @@ export default function ListView({ initial }: { initial: Snapshot }) {
       className={`mx-auto min-h-dvh w-full max-w-xl ${selecting ? "pb-48" : "pb-24"}`}
       onPointerMove={moveDrag}
       onPointerUp={endDrag}
-      onPointerCancel={endDrag}
+      onPointerCancel={cancelDrag}
       style={dragId ? { touchAction: "none", userSelect: "none" } : undefined}
     >
       <header

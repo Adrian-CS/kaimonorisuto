@@ -895,6 +895,70 @@ async function run(browser, lang, s) {
       throw new Error("el cambio de Fanta limón no llegó");
   });
 
+  await step("una tienda que no es del hogar no rompe el cambio", async () => {
+    const snap = await (await page.request.get(`${BASE}/api/snapshot`)).json();
+    const papel = snap.items.find((x) => x.name === "Papel Albal");
+    const res = await page.request.patch(`${BASE}/api/items/${papel.id}`, {
+      data: { store_id: crypto.randomUUID(), note: "nota que no se pierde" },
+    });
+    if (!res.ok()) throw new Error(`PATCH -> ${res.status()}`);
+    const after = await (await page.request.get(`${BASE}/api/snapshot`)).json();
+    const it = after.items.find((x) => x.id === papel.id);
+    if (it.store_id !== null || it.note !== "nota que no se pierde")
+      throw new Error(JSON.stringify(it));
+    await page.request.patch(`${BASE}/api/items/${papel.id}`, { data: { note: null } });
+  });
+
+  await step("borrar comprados solo borra los que se indican", async () => {
+    const mk = async (name) => {
+      const id = crypto.randomUUID();
+      await page.request.post(`${BASE}/api/items`, { data: { id, name } });
+      await page.request.patch(`${BASE}/api/items/${id}`, { data: { done: 1 } });
+      return id;
+    };
+    const a = await mk("Borrar A");
+    const b = await mk("Borrar B");
+    await page.request.delete(`${BASE}/api/items`, { data: { ids: [a] } });
+    const snap = await (await page.request.get(`${BASE}/api/snapshot`)).json();
+    if (snap.items.some((x) => x.id === a)) throw new Error("A sigue");
+    if (!snap.items.some((x) => x.id === b)) throw new Error("se ha borrado B");
+    await page.request.delete(`${BASE}/api/items/${b}`);
+    await page.reload({ waitUntil: "networkidle" });
+  });
+
+  await step("las fotos se comprueban por contenido y se sirven con nosniff", async () => {
+    const fake = {
+      file: { name: "x.png", mimeType: "image/png", buffer: Buffer.from("<script>alert(1)</script>") },
+    };
+    const res = await page.request.post(`${BASE}/api/photos`, { multipart: fake });
+    if (res.status() !== 400 || (await res.json()).error !== "photo_type")
+      throw new Error(`aceptó un PNG falso (${res.status()})`);
+    const snap = await (await page.request.get(`${BASE}/api/snapshot`)).json();
+    const key = snap.items.find((x) => x.photo_key)?.photo_key;
+    const img = await page.request.get(`${BASE}/api/photos/${key}`);
+    if (img.headers()["x-content-type-options"] !== "nosniff") throw new Error("sin nosniff");
+  });
+
+  if (lang === "ja")
+    // Solo en la segunda vuelta: los fallos cuentan por IP durante 15 minutos.
+    await step("demasiados intentos de login se bloquean (429)", async () => {
+      const email = `fuerza${Date.now()}@ejemplo.com`;
+      const anon = await browser.newContext();
+      for (let i = 0; i < 10; i++) {
+        const r = await anon.request.post(`${BASE}/api/auth/login`, {
+          data: { email, password: "incorrecta" },
+        });
+        if (r.status() !== 401) throw new Error(`intento ${i}: ${r.status()}`);
+      }
+      const r = await anon.request.post(`${BASE}/api/auth/login`, {
+        data: { email, password: "incorrecta" },
+      });
+      const body = await r.json();
+      await anon.close();
+      if (r.status() !== 429 || body.error !== "too_many_attempts")
+        throw new Error(`esperaba 429, llega ${r.status()}`);
+    });
+
   await step("borrar comprados", async () => {
     const before = await page.locator("main ul li").count();
     const done = await page.locator("main ul li .line-through").count();

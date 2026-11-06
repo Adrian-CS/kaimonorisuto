@@ -1,4 +1,4 @@
-import { getDb, newId, now } from "./db";
+import { PHOTO_PREFIX, getDb, newId, now } from "./db";
 import { sameName } from "./names";
 import { nameKey } from "./money";
 import type { Category, Item, Store } from "./types";
@@ -50,6 +50,31 @@ export async function ensureCategory(
     .bind(id, householdId, name, Math.max(0, ...all.map((c) => c.sort_order)) + 1, now())
     .run();
   return { id, name };
+}
+
+/**
+ * El id de tienda solo vale si es de este hogar; si no (de otra casa, o una
+ * tienda que se acaba de borrar), el artículo se queda sin tienda en vez de
+ * fallar por la clave foránea y perder el resto del cambio.
+ */
+export async function ownStoreId(
+  householdId: string,
+  v: unknown,
+): Promise<string | null> {
+  if (typeof v !== "string" || !v) return null;
+  const db = await getDb();
+  const row = await db
+    .prepare("SELECT id FROM stores WHERE id = ? AND household_id = ?")
+    .bind(v, householdId)
+    .first<{ id: string }>();
+  return row?.id ?? null;
+}
+
+/** Una clave de foto solo vale si es de las fotos de este hogar. */
+export function ownPhotoKey(householdId: string, v: unknown): string | null {
+  return typeof v === "string" && v.startsWith(`${PHOTO_PREFIX}/${householdId}/`)
+    ? v
+    : null;
 }
 
 export async function listItems(householdId: string): Promise<Item[]> {

@@ -39,11 +39,19 @@ export default function AuthForm() {
                 t("auth.defaultHousehold", { name: name.trim() }),
             };
 
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    } catch {
+      // Sin conexión (la pantalla puede salir de la caché del service worker).
+      setError(t("error.offline"));
+      setBusy(false);
+      return;
+    }
 
     if (!res.ok) {
       const data = (await res.json().catch(() => ({}))) as { error?: string };
