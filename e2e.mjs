@@ -35,6 +35,7 @@ const S = {
     add: "Añadir artículo…",
     settings: "Ajustes",
     storeName: "Nombre del supermercado",
+    alsoIn: (n) => `también en ${n}`,
     frequent: "Lo de siempre",
     frequentPick: (n) => `Elegir ${n}`,
     frequentAdd: /^Añadir \(/,
@@ -95,6 +96,7 @@ const S = {
     add: "商品を追加…",
     settings: "設定",
     storeName: "お店の名前",
+    alsoIn: (n) => `${n}にもあります`,
     frequent: "いつもの",
     frequentPick: (n) => `${n}を選択`,
     frequentAdd: /^追加（/,
@@ -273,7 +275,10 @@ async function run(browser, lang, s) {
 
   await step("editar artículo: tienda, foto y campos opcionales", async () => {
     await page.getByRole("button", { name: s.editItem("Nutella") }).click();
-    await page.selectOption("select", { label: s.storeA });
+    await page
+      .locator("[data-sheet-panel]")
+      .getByRole("button", { name: s.storeA, exact: true })
+      .click();
     // Dos campos: cámara (con capture) y álbum (sin él).
     const camera = page.locator('[data-photo-input="camera"]');
     const album = page.locator('[data-photo-input="album"]');
@@ -443,11 +448,10 @@ async function run(browser, lang, s) {
     await page.waitForTimeout(900);
 
     // Papel Albal tiene que haber acabado en el grupo de la primera tienda
+    const snap = await (await page.request.get(`${BASE}/api/snapshot`)).json();
+    const papel = snap.items.find((x) => x.name === "Papel Albal");
+    if (!papel.store_ids.length) throw new Error("sigue sin supermercado tras arrastrarlo");
     await page.reload({ waitUntil: "networkidle" });
-    await page.getByRole("button", { name: s.editItem("Papel Albal") }).click();
-    const selected = await page.locator("select").inputValue();
-    if (!selected) throw new Error("sigue sin supermercado tras arrastrarlo");
-    await page.getByRole("button", { name: s.close, exact: true }).click();
   });
 
   await step("cambiar categoría y tienda en bloque", async () => {
@@ -464,7 +468,7 @@ async function run(browser, lang, s) {
     const storeB = snap.stores.find((x) => x.name === s.storeB)?.id;
     for (const n of ["Fanta limón", "Sprite"]) {
       const it = snap.items.find((x) => x.name === n);
-      if (it?.category !== s.categoryB || it?.store_id !== storeB)
+      if (it?.category !== s.categoryB || JSON.stringify(it?.store_ids) !== JSON.stringify([storeB]))
         throw new Error(`${n} no ha cambiado: ${JSON.stringify(it)}`);
     }
     // El resto no se toca.
@@ -903,6 +907,56 @@ async function run(browser, lang, s) {
       throw new Error("el cambio de Fanta limón no llegó");
   });
 
+  await step("varias tiendas: sale en las dos y se marca una vez", async () => {
+    await page.reload({ waitUntil: "networkidle" });
+    await page.getByRole("button", { name: s.groupStore, exact: true }).click();
+    await page.getByRole("button", { name: s.editItem("Sprite") }).first().click();
+    const sheet = page.locator("[data-sheet-panel]");
+    for (const name of [s.storeA, s.storeB]) {
+      const chip = sheet.getByRole("button", { name, exact: true });
+      if ((await chip.getAttribute("aria-pressed")) !== "true") await chip.click();
+    }
+    await page.screenshot({ path: `${SHOTS}/${lang}-10-varias-tiendas-ficha.png` });
+    await sheet.getByRole("button", { name: s.save }).click();
+    await page.waitForTimeout(800);
+
+    const snap = await (await page.request.get(`${BASE}/api/snapshot`)).json();
+    const ids = [s.storeA, s.storeB].map((n) => snap.stores.find((x) => x.name === n).id);
+    const sprite = snap.items.find((x) => x.name === "Sprite");
+    if (![...ids].every((id) => sprite.store_ids.includes(id)))
+      throw new Error(`store_ids: ${JSON.stringify(sprite.store_ids)}`);
+
+    const rows = page.locator("main ul li", { hasText: "Sprite" });
+    if ((await rows.count()) !== 2) throw new Error(`filas: ${await rows.count()}`);
+    await rows.first().getByText(s.alsoIn(s.storeB)).waitFor();
+    await page.screenshot({ path: `${SHOTS}/${lang}-11-varias-tiendas.png` });
+
+    // Marcar en una tienda lo tacha en las dos (es un solo artículo).
+    const wasDone = sprite.done;
+    await rows.first().locator("button").first().click();
+    await page.waitForTimeout(500);
+    const struck = await page.locator("main ul li .line-through", { hasText: "Sprite" }).count();
+    if (struck !== (wasDone ? 0 : 2)) throw new Error(`tachadas: ${struck}`);
+    await rows.first().locator("button").first().click(); // como estaba
+    await page.waitForTimeout(500);
+  });
+
+  await step("varias tiendas: borrar una la quita de sus artículos", async () => {
+    const tmp = (await (await page.request.post(`${BASE}/api/stores`, {
+      data: { name: "Temporal" },
+    })).json()).id;
+    const snap = await (await page.request.get(`${BASE}/api/snapshot`)).json();
+    const sprite = snap.items.find((x) => x.name === "Sprite");
+    await page.request.patch(`${BASE}/api/items/${sprite.id}`, {
+      data: { store_ids: [...sprite.store_ids, tmp] },
+    });
+    await page.request.delete(`${BASE}/api/stores/${tmp}`);
+    const after = (await (await page.request.get(`${BASE}/api/snapshot`)).json())
+      .items.find((x) => x.id === sprite.id);
+    if (after.store_ids.includes(tmp) || after.store_ids.length !== sprite.store_ids.length)
+      throw new Error(JSON.stringify(after.store_ids));
+  });
+
   // Ayudas para los pasos de frecuentes.
   const snapshot = async () => (await page.request.get(`${BASE}/api/snapshot`)).json();
   const pendingNamed = async (name) =>
@@ -916,8 +970,9 @@ async function run(browser, lang, s) {
     snap = await snapshot();
     const p = snap.products.find((x) => x.name === "Nutella");
     if (!p) throw new Error("Nutella no está en el histórico");
-    for (const k of ["photo_key", "store_id", "category", "qty"])
-      if (p[k] !== nutella[k]) throw new Error(`${k}: ${p[k]} ≠ ${nutella[k]}`);
+    for (const k of ["photo_key", "store_ids", "category", "qty"])
+      if (JSON.stringify(p[k]) !== JSON.stringify(nutella[k]))
+        throw new Error(`${k}: ${p[k]} ≠ ${nutella[k]}`);
     // Borrar el artículo no se lleva la foto: el histórico la conserva.
     await page.request.delete(`${BASE}/api/items/${nutella.id}`);
     if ((await page.request.get(`${BASE}/api/photos/${p.photo_key}`)).status() !== 200)
@@ -934,7 +989,8 @@ async function run(browser, lang, s) {
     await page.waitForTimeout(800);
     const [added] = await pendingNamed("Nutella");
     const p = (await snapshot()).products.find((x) => x.name === "Nutella");
-    if (!added || added.photo_key !== p.photo_key || added.store_id !== p.store_id ||
+    if (!added || added.photo_key !== p.photo_key ||
+        JSON.stringify(added.store_ids) !== JSON.stringify(p.store_ids) ||
         added.category !== p.category || added.qty !== p.qty)
       throw new Error(`no viene relleno: ${JSON.stringify(added)}`);
     if ((await page.getByPlaceholder(s.add).inputValue()) !== "")
@@ -954,7 +1010,7 @@ async function run(browser, lang, s) {
     await page.keyboard.press("Enter");
     await page.waitForTimeout(800);
     const [added] = await pendingNamed("Nutella");
-    if (!added?.photo_key || !added.store_id) throw new Error(JSON.stringify(added));
+    if (!added?.photo_key || !added.store_ids?.length) throw new Error(JSON.stringify(added));
     await page.request.delete(`${BASE}/api/items/${added.id}`);
   });
 
@@ -989,13 +1045,14 @@ async function run(browser, lang, s) {
   await step("una tienda que no es del hogar no rompe el cambio", async () => {
     const snap = await (await page.request.get(`${BASE}/api/snapshot`)).json();
     const papel = snap.items.find((x) => x.name === "Papel Albal");
+    // Formato antiguo (store_id), como lo mandaría una cola guardada de antes.
     const res = await page.request.patch(`${BASE}/api/items/${papel.id}`, {
       data: { store_id: crypto.randomUUID(), note: "nota que no se pierde" },
     });
     if (!res.ok()) throw new Error(`PATCH -> ${res.status()}`);
     const after = await (await page.request.get(`${BASE}/api/snapshot`)).json();
     const it = after.items.find((x) => x.id === papel.id);
-    if (it.store_id !== null || it.note !== "nota que no se pierde")
+    if (it.store_ids.length !== 0 || it.note !== "nota que no se pierde")
       throw new Error(JSON.stringify(it));
     await page.request.patch(`${BASE}/api/items/${papel.id}`, { data: { note: null } });
   });

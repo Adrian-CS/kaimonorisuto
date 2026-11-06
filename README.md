@@ -15,6 +15,8 @@ Todo lo demás es opcional: se puede usar escribiendo solo el nombre.
   de categoría.
 - **Categorías como las tiendas**: se crean una vez en Ajustes (o con el «+» de
   la ficha) y luego se eligen de una lista.
+- **Varias tiendas por artículo**: «leche, en Mercadona o en Seiyu». Sale en
+  cada una al agrupar por tienda y se marca una sola vez.
 - **Lo de siempre**: lo que habéis comprado otras veces se sugiere al escribir
   (con su foto, tienda, categoría y cantidad) y se puede añadir en bloque desde
   ⭐, sin rellenar nada otra vez.
@@ -217,7 +219,26 @@ Al soltar se renumera todo y se guarda en una sola llamada (`PATCH
 /api/items/order`, un `db.batch`). Con la vista agrupada por supermercado,
 soltar en otro grupo **le cambia la tienda** — es la forma rápida de clasificar
 sin abrir la ficha. Con la vista por categoría pasa lo mismo con la categoría.
+Como un artículo puede estar en varias tiendas, soltarlo en otra **le añade**
+esa tienda (sigue en las que tenía); soltarlo en «Sin supermercado» se las
+quita todas. Para quitarle solo una, desde la ficha.
 Los grupos vacíos se pintan en gris justo para poder soltar ahí.
+
+## Varias tiendas por artículo
+
+En la ficha, las tiendas son botones que se encienden y apagan: se pueden elegir
+varias. Se guardan en `items.store_ids` (lista JSON, migración 0007; la columna
+`store_id` de antes queda vacía y sin uso). La primera elegida es la principal:
+con ella se recuerda y se sugiere el precio.
+
+- **Agrupado por tienda**, el artículo sale en cada una, con «también en …»
+  debajo. Es un solo artículo: marcarlo en una lo tacha en todas.
+- **Totales**: el de arriba lo cuenta una vez; el de cada tienda lo incluye,
+  porque es lo que costaría comprarlo allí.
+- **«Poner súper…»** en el modo selección deja esa como única tienda.
+- **Borrar una tienda** la quita de las listas de artículos y del histórico.
+- El servidor sigue aceptando `store_id` (una sola) de clientes o colas
+  guardadas de antes de este cambio.
 
 ## Lo de siempre (frecuentes)
 

@@ -26,9 +26,25 @@ const SIN_SUPER = "__sin_super__";
 const SIN_CATEGORIA = "__sin_categoria__";
 const NUEVA = "__nueva__";
 
-type NewItem = Partial<Pick<Item, "qty" | "category" | "store_id" | "photo_key">> & {
+type NewItem = Partial<Pick<Item, "qty" | "category" | "store_ids" | "photo_key">> & {
   name: string;
 };
+
+/**
+ * Artículos guardados en el móvil antes de que hubiera varias tiendas traen
+ * `store_id` en vez de `store_ids`: se convierten al leerlos.
+ */
+function normalizeItems(list: Item[]): Item[] {
+  return list.map((i) => {
+    if (Array.isArray(i.store_ids)) return i;
+    const legacy = (i as Item & { store_id?: string | null }).store_id;
+    return { ...i, store_ids: legacy ? [legacy] : [] };
+  });
+}
+
+function normalizeProducts(list: Product[]): Product[] {
+  return list.map((p) => (Array.isArray(p.store_ids) ? p : { ...p, store_ids: [] }));
+}
 
 /** Para buscar sin mayúsculas, y con ancho completo/medio igualados (ｍｉｌｋ = milk). */
 const fold = (s: string) => s.normalize("NFKC").toLocaleLowerCase().trim();
@@ -197,8 +213,8 @@ export default function ListView({ initial }: { initial: Snapshot }) {
       setMe(data.me);
       setStores(data.stores);
       setCategories(data.categories ?? []);
-      setItems(data.items);
-      setProducts(data.products ?? []);
+      setItems(normalizeItems(data.items));
+      setProducts(normalizeProducts(data.products ?? []));
     } catch {
       setNetDown(true); // sin conexión: se reintenta al siguiente tick
     }
@@ -216,8 +232,8 @@ export default function ListView({ initial }: { initial: Snapshot }) {
       setMe(cached.data.me);
       setStores(cached.data.stores);
       setCategories(cached.data.categories ?? []);
-      setItems(cached.data.items);
-      setProducts(cached.data.products ?? []);
+      setItems(normalizeItems(cached.data.items));
+      setProducts(normalizeProducts(cached.data.products ?? []));
     }
 
     let wasPending = ob.size > 0;
@@ -307,7 +323,7 @@ export default function ListView({ initial }: { initial: Snapshot }) {
       qty: p.qty,
       category: p.category,
       // La tienda puede haberse borrado desde entonces.
-      store_id: stores.some((s) => s.id === p.store_id) ? p.store_id : null,
+      store_ids: p.store_ids.filter((id) => stores.some((s) => s.id === id)),
       photo_key: p.photo_key,
     };
   }
@@ -334,7 +350,7 @@ export default function ListView({ initial }: { initial: Snapshot }) {
       qty: fields.qty ?? null,
       category: fields.category ?? null,
       note: null,
-      store_id: fields.store_id ?? null,
+      store_ids: fields.store_ids ?? [],
       photo_key: fields.photo_key ?? null,
       price: null,
       done: 0,
@@ -506,7 +522,11 @@ export default function ListView({ initial }: { initial: Snapshot }) {
       touch();
       setStores((prev) => prev.filter((s) => s.id !== id));
       setItems((prev) =>
-        prev.map((i) => (i.store_id === id ? { ...i, store_id: real } : i)),
+        prev.map((i) =>
+          i.store_ids.includes(id)
+            ? { ...i, store_ids: [...new Set(i.store_ids.map((x) => (x === id ? real : x)))] }
+            : i,
+        ),
       );
     });
     return id;
@@ -522,7 +542,11 @@ export default function ListView({ initial }: { initial: Snapshot }) {
     touch();
     setStores((prev) => prev.filter((s) => s.id !== id));
     setItems((prev) =>
-      prev.map((i) => (i.store_id === id ? { ...i, store_id: null } : i)),
+      prev.map((i) =>
+        i.store_ids.includes(id)
+          ? { ...i, store_ids: i.store_ids.filter((x) => x !== id) }
+          : i,
+      ),
     );
     void json("DELETE", `/api/stores/${id}`);
   }
@@ -649,7 +673,7 @@ export default function ListView({ initial }: { initial: Snapshot }) {
     });
   }
 
-  function bulkPatch(patch: { category?: string | null; store_id?: string | null }) {
+  function bulkPatch(patch: { category?: string | null; store_ids?: string[] }) {
     const ids = [...selected];
     if (!ids.length) return;
     touch();
@@ -676,10 +700,11 @@ export default function ListView({ initial }: { initial: Snapshot }) {
     if (value === NUEVA) {
       const n = window.prompt(t("store.promptNew"));
       if (!n?.trim()) return;
-      bulkPatch({ store_id: createStore(n.trim()) });
+      bulkPatch({ store_ids: [createStore(n.trim())] });
       return;
     }
-    bulkPatch({ store_id: value === SIN_SUPER ? null : value });
+    // «Poner súper» deja esa como su única tienda (para añadir más, la ficha).
+    bulkPatch({ store_ids: value === SIN_SUPER ? [] : [value] });
   }
 
   /* ---------- derivados ---------- */
@@ -705,8 +730,10 @@ export default function ListView({ initial }: { initial: Snapshot }) {
     [categories],
   );
 
-  const storeName = useCallback(
-    (id: string | null) => stores.find((s) => s.id === id)?.name ?? SIN_SUPER,
+  /** Nombres de las tiendas (que sigan existiendo) de un artículo. */
+  const storeNames = useCallback(
+    (ids: string[]) =>
+      ids.flatMap((id) => stores.find((s) => s.id === id)?.name ?? []),
     [stores],
   );
 
@@ -758,11 +785,18 @@ export default function ListView({ initial }: { initial: Snapshot }) {
     }
 
     for (const it of visible) {
-      const label =
-        groupBy === "store" ? storeName(it.store_id) : (it.category ?? SIN_CATEGORIA);
-      const list = buckets.get(label);
-      if (list) list.push(it);
-      else buckets.set(label, [it]);
+      // Por tienda, un artículo sale en cada una de sus tiendas.
+      const labels =
+        groupBy === "store"
+          ? storeNames(it.store_ids).length
+            ? storeNames(it.store_ids)
+            : [SIN_SUPER]
+          : [it.category ?? SIN_CATEGORIA];
+      for (const label of labels) {
+        const list = buckets.get(label);
+        if (list) list.push(it);
+        else buckets.set(label, [it]);
+      }
     }
 
     const order =
@@ -777,7 +811,7 @@ export default function ListView({ initial }: { initial: Snapshot }) {
         return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib);
       })
       .map(([label, list]) => ({ key: label, label, items: list }));
-  }, [visible, groupBy, stores, categoryNames, storeName]);
+  }, [visible, groupBy, stores, categoryNames, storeNames]);
 
   const pending = items.filter((i) => !i.done).length;
   const doneCount = items.length - pending;
@@ -793,15 +827,31 @@ export default function ListView({ initial }: { initial: Snapshot }) {
     [stores],
   );
 
+  /**
+   * Con la lista por tiendas, un artículo de varias tiendas sale en cada una:
+   * debajo se recuerda dónde más está («también en Seiyu»).
+   */
+  const alsoIn = (it: Item, groupKey: string) => {
+    const names = storeNames(it.store_ids);
+    if (groupBy !== "store" || names.length < 2) return null;
+    const others = names.filter((n) => n !== groupKey);
+    return t("store.alsoIn", { names: others.join(", ") });
+  };
+
   /** «Mercadona · Lácteos · 2 bricks» para enseñar debajo de un producto. */
   const productDetail = (p: Product) =>
-    [stores.find((s) => s.id === p.store_id)?.name, p.category, p.qty]
+    [storeNames(p.store_ids).join(" / "), p.category, p.qty]
       .filter(Boolean)
       .join(" · ");
 
   /* ---------- arrastrar y soltar ---------- */
 
-  function startDrag(e: React.PointerEvent, id: string) {
+  // Una fila es «este artículo en este grupo»: con varias tiendas, el mismo
+  // artículo sale en varios grupos y hay que saber de cuál se ha cogido.
+  const rowKey = (groupKey: string, id: string) => `${groupKey}\u0001${id}`;
+  const [dragFrom, setDragFrom] = useState<string | null>(null);
+
+  function startDrag(e: React.PointerEvent, id: string, groupKey: string) {
     e.preventDefault();
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
 
@@ -821,12 +871,13 @@ export default function ListView({ initial }: { initial: Snapshot }) {
         });
       }
       for (const it of g.items) {
-        const el = rowRefs.current.get(it.id);
+        const key = rowKey(g.key, it.id);
+        const el = rowRefs.current.get(key);
         if (!el) continue;
         const r = el.getBoundingClientRect();
         measured.push({
           kind: "item",
-          id: it.id,
+          id: key,
           groupKey: g.key,
           top: r.top,
           bottom: r.bottom,
@@ -834,6 +885,7 @@ export default function ListView({ initial }: { initial: Snapshot }) {
       }
     }
     bands.current = measured;
+    setDragFrom(groupKey);
     setDragId(id);
     setDragY(e.clientY);
     setDropAt(null);
@@ -856,13 +908,13 @@ export default function ListView({ initial }: { initial: Snapshot }) {
           if (index < 0) index = flat.length;
           groupKey = band.groupKey;
         } else {
-          index = flat.findIndex((f) => f.id === band.id);
+          index = flat.findIndex((f) => f.key === band.id);
           groupKey = band.groupKey;
         }
         break;
       }
       if (band.kind === "item") {
-        index = flat.findIndex((f) => f.id === band.id) + 1;
+        index = flat.findIndex((f) => f.key === band.id) + 1;
         groupKey = band.groupKey;
       } else {
         groupKey = band.groupKey;
@@ -874,42 +926,55 @@ export default function ListView({ initial }: { initial: Snapshot }) {
 
   function visibleFlat() {
     return groups.flatMap((g) =>
-      g.items.map((it) => ({ id: it.id, groupKey: g.key })),
+      g.items.map((it) => ({ key: rowKey(g.key, it.id), id: it.id, groupKey: g.key })),
     );
   }
 
   function endDrag() {
     const id = dragId;
     const target = dropAt;
+    const fromGroup = dragFrom;
     setDragId(null);
     setDropAt(null);
+    setDragFrom(null);
     bands.current = [];
-    if (!id || !target) return;
+    if (!id || !target || fromGroup === null) return;
 
-    const flat = visibleFlat().map((f) => f.id);
-    const from = flat.indexOf(id);
+    const flat = visibleFlat();
+    const fromKey = rowKey(fromGroup, id);
+    const from = flat.findIndex((f) => f.key === fromKey);
     if (from < 0) return;
 
-    const without = flat.filter((x) => x !== id);
+    const rows = flat.filter((f) => f.key !== fromKey);
     const to = target.index > from ? target.index - 1 : target.index;
-    without.splice(Math.max(0, Math.min(to, without.length)), 0, id);
+    rows.splice(Math.max(0, Math.min(to, rows.length)), 0, flat[from]);
+    // El orden es uno por artículo: manda la primera vez que aparece.
+    const order = [...new Set(rows.map((r) => r.id))];
 
-    const newStoreId =
-      groupBy === "store" ? storeIdByLabel(target.groupKey) : undefined;
+    const item = items.find((i) => i.id === id);
+    // Soltar en otra tienda la añade (sin quitar las que ya tenía: está «en
+    // las dos»); soltar en «sin supermercado» le quita todas.
+    let newStoreIds: string[] | undefined;
+    if (groupBy === "store" && item && target.groupKey !== fromGroup) {
+      const targetId = storeIdByLabel(target.groupKey);
+      if (target.groupKey === SIN_SUPER) newStoreIds = [];
+      else if (targetId && !item.store_ids.includes(targetId))
+        newStoreIds = [...item.store_ids, targetId];
+    }
     const newCategory =
-      groupBy === "category"
+      groupBy === "category" && target.groupKey !== fromGroup
         ? target.groupKey === SIN_CATEGORIA
           ? null
           : target.groupKey
         : undefined;
 
-    const orderOf = new Map(without.map((x, i) => [x, i]));
+    const orderOf = new Map(order.map((x, i) => [x, i]));
     touch();
     setItems((prev) =>
       prev.map((it) => {
         if (!orderOf.has(it.id)) return it;
         const next = { ...it, sort_order: orderOf.get(it.id)! };
-        if (it.id === id && newStoreId !== undefined) next.store_id = newStoreId;
+        if (it.id === id && newStoreIds !== undefined) next.store_ids = newStoreIds;
         if (it.id === id && newCategory !== undefined) next.category = newCategory;
         return next;
       }),
@@ -917,13 +982,13 @@ export default function ListView({ initial }: { initial: Snapshot }) {
 
     // Por la cola, como todo: sin conexión el nuevo orden también se guarda.
     void json("PATCH", "/api/items/order", {
-      moves: without.map((x, i) =>
+      moves: order.map((x, i) =>
         x !== id
           ? { id: x, sort_order: i }
           : {
               id: x,
               sort_order: i,
-              ...(newStoreId !== undefined && { store_id: newStoreId }),
+              ...(newStoreIds !== undefined && { store_ids: newStoreIds }),
               ...(newCategory !== undefined && { category: newCategory }),
             },
       ),
@@ -935,6 +1000,7 @@ export default function ListView({ initial }: { initial: Snapshot }) {
     setDragId(null);
     setDropAt(null);
     bands.current = [];
+    setDragFrom(null);
   }
 
   const draggedItem = dragId ? items.find((i) => i.id === dragId) : null;
@@ -1202,10 +1268,10 @@ export default function ListView({ initial }: { initial: Snapshot }) {
                 const myIndex = flatIndex++;
                 return (
                   <li
-                    key={it.id}
-                    ref={setRowRef(it.id)}
+                    key={rowKey(g.key, it.id)}
+                    ref={setRowRef(rowKey(g.key, it.id))}
                     className={`border-b border-border/70 transition-colors ${
-                      dragId === it.id ? "opacity-30" : ""
+                      dragId === it.id && dragFrom === g.key ? "opacity-30" : ""
                     } ${armed === it.id || (selecting && selected.has(it.id)) ? "bg-accent/10" : ""}`}
                   >
                     {dropIndicator(myIndex)}
@@ -1301,9 +1367,9 @@ export default function ListView({ initial }: { initial: Snapshot }) {
                               {t(flash.key)}
                             </span>
                           ) : (
-                            it.note && (
+                            (it.note || alsoIn(it, g.key)) && (
                               <span className="block truncate text-xs text-muted">
-                                {it.note}
+                                {[it.note, alsoIn(it, g.key)].filter(Boolean).join(" · ")}
                               </span>
                             )
                           )}
@@ -1335,7 +1401,7 @@ export default function ListView({ initial }: { initial: Snapshot }) {
                             role="button"
                             tabIndex={0}
                             aria-label={t("drag.handle", { name: it.name })}
-                            onPointerDown={(e) => startDrag(e, it.id)}
+                            onPointerDown={(e) => startDrag(e, it.id, g.key)}
                             className="shrink-0 cursor-grab touch-none px-1 py-1 text-lg leading-none text-muted select-none"
                           >
                             ⠿

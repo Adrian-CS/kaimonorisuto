@@ -19,7 +19,8 @@ export type Item = {
   qty: string | null;
   category: string | null;
   note: string | null;
-  store_id: string | null;
+  /** Tiendas donde se puede comprar; la primera es la principal. */
+  store_ids: string[];
   photo_key: string | null;
   price: number | null;
   done: number;
@@ -34,7 +35,7 @@ export type Product = {
   name: string;
   qty: string | null;
   category: string | null;
-  store_id: string | null;
+  store_ids: string[];
   photo_key: string | null;
   times: number;
   last_at: number;

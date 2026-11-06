@@ -17,7 +17,7 @@ import type { Category, Item, Store } from "@/lib/types";
 export type ItemPatch = Partial<
   Pick<
     Item,
-    "name" | "qty" | "category" | "note" | "store_id" | "photo_key" | "price"
+    "name" | "qty" | "category" | "note" | "store_ids" | "photo_key" | "price"
   >
 >;
 
@@ -62,7 +62,8 @@ export default function ItemSheet({
   const [qty, setQty] = useState(item.qty ?? "");
   const [category, setCategory] = useState(item.category ?? "");
   const [note, setNote] = useState(item.note ?? "");
-  const [storeId, setStoreId] = useState(item.store_id ?? "");
+  // Tiendas donde se puede comprar; la primera elegida es la principal.
+  const [storeIds, setStoreIds] = useState<string[]>(item.store_ids);
   const [photoKey, setPhotoKey] = useState(item.photo_key);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -81,7 +82,7 @@ export default function ItemSheet({
 
   // Si no hay precio puesto, busca el que se recordó de este mismo producto.
   const qs = new URLSearchParams({ name: name.trim() });
-  if (storeId) qs.set("store_id", storeId);
+  if (storeIds[0]) qs.set("store_id", storeIds[0]);
   const query = qs.toString();
   const wantSuggestion = !price.trim() && Boolean(name.trim());
   const suggested =
@@ -143,7 +144,7 @@ export default function ItemSheet({
     const n = window.prompt(t("store.promptNew"));
     if (!n?.trim()) return;
     const id = await onCreateStore(n.trim());
-    if (id) setStoreId(id);
+    if (id) setStoreIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
   }
 
   async function addCategory() {
@@ -194,12 +195,13 @@ export default function ItemSheet({
       qty: qty.trim() || null,
       category: category.trim() || null,
       note: note.trim() || null,
-      store_id: storeId || null,
+      store_ids: storeIds,
       photo_key: photoKey,
     };
     const patch: ItemPatch = {};
     for (const k of Object.keys(next) as (keyof ItemPatch)[])
-      if (next[k] !== opened[k]) Object.assign(patch, { [k]: next[k] });
+      if (JSON.stringify(next[k]) !== JSON.stringify(opened[k]))
+        Object.assign(patch, { [k]: next[k] });
     if (Object.keys(patch).length) onSave(patch);
     close(photoKey);
   }
@@ -315,25 +317,40 @@ export default function ItemSheet({
           />
         )}
 
-        {/* Supermercado */}
-        <div className="flex gap-2">
-          <select
-            className="field"
-            value={storeId}
-            onChange={(e) => setStoreId(e.target.value)}
-          >
-            <option value="">{t("store.none")}</option>
-            {stores.map((s) => (
-              <option key={s.id} value={s.id}>
+        {/* Supermercados: se puede elegir más de uno («en Mercadona o en Seiyu»). */}
+        <div
+          role="group"
+          aria-label={t("store.pick")}
+          className="flex flex-wrap items-center gap-1.5"
+        >
+          {stores.map((s) => {
+            const on = storeIds.includes(s.id);
+            return (
+              <button
+                key={s.id}
+                type="button"
+                aria-pressed={on}
+                onClick={() =>
+                  setStoreIds((prev) =>
+                    on ? prev.filter((x) => x !== s.id) : [...prev, s.id],
+                  )
+                }
+                className={`rounded-full border px-3 py-1.5 text-sm ${
+                  on ? "border-accent bg-accent/15 text-accent" : "border-border text-muted"
+                }`}
+              >
                 {s.name}
-              </option>
-            ))}
-          </select>
+              </button>
+            );
+          })}
+          {stores.length === 0 && (
+            <span className="text-sm text-muted">{t("store.none")}</span>
+          )}
           <button
             type="button"
-            className="btn shrink-0"
+            className="rounded-full border border-dashed border-border px-3 py-1.5 text-sm text-muted"
             onClick={addStore}
-            aria-label={t("common.add")}
+            aria-label={t("store.promptNew")}
           >
             +
           </button>

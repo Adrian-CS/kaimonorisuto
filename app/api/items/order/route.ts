@@ -1,13 +1,15 @@
 import { requireMe } from "@/lib/auth";
 import { fail, handler, json, opt } from "@/lib/api";
 import { getDb, now } from "@/lib/db";
-import { ownStoreId } from "@/lib/queries";
+import { storeIdsFromBody } from "@/lib/queries";
 
 export const dynamic = "force-dynamic";
 
 type Move = {
   id: string;
   sort_order: number;
+  store_ids?: string[];
+  /** De clientes antiguos. */
   store_id?: string | null;
   category?: string | null;
 };
@@ -30,9 +32,10 @@ export const PATCH = handler(async (req: Request) => {
     moves.map(async (m) => {
       const sets = ["sort_order = ?", "updated_at = ?"];
       const values: (string | number | null)[] = [Number(m.sort_order) || 0, t];
-      if ("store_id" in m) {
-        sets.push("store_id = ?");
-        values.push(await ownStoreId(me.householdId, m.store_id));
+      const storeIds = await storeIdsFromBody(me.householdId, m);
+      if (storeIds) {
+        sets.push("store_ids = ?");
+        values.push(JSON.stringify(storeIds));
       }
       if ("category" in m) {
         // Solo se puede soltar en un grupo que ya existe, así que no hace

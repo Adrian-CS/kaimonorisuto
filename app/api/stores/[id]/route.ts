@@ -46,10 +46,21 @@ export const DELETE = handler(async (_req: Request, ctx: Ctx) => {
   const me = await requireMe();
   const { id } = await ctx.params;
   const db = await getDb();
-  const res = await db
-    .prepare("DELETE FROM stores WHERE id = ? AND household_id = ?")
-    .bind(id, me.householdId)
-    .run();
+  // La tienda sale de las listas de tiendas de artículos y del histórico.
+  const without = (table: string) =>
+    db
+      .prepare(
+        `UPDATE ${table} SET store_ids =
+           (SELECT json_group_array(value) FROM json_each(${table}.store_ids) WHERE value <> ?1)
+         WHERE household_id = ?2
+           AND EXISTS (SELECT 1 FROM json_each(${table}.store_ids) WHERE value = ?1)`,
+      )
+      .bind(id, me.householdId);
+  const [res] = await db.batch([
+    db.prepare("DELETE FROM stores WHERE id = ? AND household_id = ?").bind(id, me.householdId),
+    without("items"),
+    without("products"),
+  ]);
   if (!res.meta.changes) return fail("not_found", 404);
   return json({ ok: true });
 });

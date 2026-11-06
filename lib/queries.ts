@@ -52,22 +52,40 @@ export async function ensureCategory(
   return { id, name };
 }
 
+/** Lista de ids guardada como JSON en D1. */
+export function parseIds(raw: unknown): string[] {
+  try {
+    const v = JSON.parse(String(raw ?? "[]")) as unknown;
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
 /**
- * El id de tienda solo vale si es de este hogar; si no (de otra casa, o una
- * tienda que se acaba de borrar), el artículo se queda sin tienda en vez de
- * fallar por la clave foránea y perder el resto del cambio.
+ * Tiendas de un artículo a partir de lo que mande el cliente: `store_ids`
+ * (lista) o, de clientes antiguos o colas guardadas de antes, `store_id`.
+ * Devuelve `undefined` si el cuerpo no toca las tiendas. Solo se quedan las
+ * que son de este hogar, sin repetir y en el orden recibido.
  */
-export async function ownStoreId(
+export async function storeIdsFromBody(
   householdId: string,
-  v: unknown,
-): Promise<string | null> {
-  if (typeof v !== "string" || !v) return null;
+  body: Record<string, unknown>,
+): Promise<string[] | undefined> {
+  let wanted: unknown[];
+  if ("store_ids" in body) wanted = Array.isArray(body.store_ids) ? body.store_ids : [];
+  else if ("store_id" in body) wanted = body.store_id ? [body.store_id] : [];
+  else return undefined;
+
+  const ids = [...new Set(wanted.filter((x): x is string => typeof x === "string" && !!x))];
+  if (!ids.length) return [];
   const db = await getDb();
-  const row = await db
-    .prepare("SELECT id FROM stores WHERE id = ? AND household_id = ?")
-    .bind(v, householdId)
-    .first<{ id: string }>();
-  return row?.id ?? null;
+  const { results } = await db
+    .prepare("SELECT id FROM stores WHERE household_id = ?")
+    .bind(householdId)
+    .all<{ id: string }>();
+  const own = new Set((results ?? []).map((r) => r.id));
+  return ids.filter((id) => own.has(id));
 }
 
 /** Una clave de foto solo vale si es de las fotos de este hogar. */
@@ -82,14 +100,14 @@ export async function listProducts(householdId: string): Promise<Product[]> {
   const db = await getDb();
   const { results } = await db
     .prepare(
-      `SELECT id, name, qty, category, store_id, photo_key, times, last_at
+      `SELECT id, name, qty, category, store_ids, photo_key, times, last_at
        FROM products WHERE household_id = ?
        ORDER BY times DESC, last_at DESC
        LIMIT 500`,
     )
     .bind(householdId)
-    .all<Product>();
-  return results ?? [];
+    .all<Omit<Product, "store_ids"> & { store_ids: string }>();
+  return (results ?? []).map((p) => ({ ...p, store_ids: parseIds(p.store_ids) }));
 }
 
 /** Marcar y desmarcar seguido no cuenta como varias compras. */
@@ -103,19 +121,19 @@ export async function recordPurchase(householdId: string, itemId: string) {
   const db = await getDb();
   const item = await db
     .prepare(
-      "SELECT name, qty, category, store_id, photo_key FROM items WHERE id = ? AND household_id = ?",
+      "SELECT name, qty, category, store_ids, photo_key FROM items WHERE id = ? AND household_id = ?",
     )
     .bind(itemId, householdId)
-    .first<Pick<Item, "name" | "qty" | "category" | "store_id" | "photo_key">>();
+    .first<Pick<Item, "name" | "qty" | "category" | "photo_key"> & { store_ids: string }>();
   if (!item?.name.trim()) return;
   const t = now();
   await db
     .prepare(
-      `INSERT INTO products (id, household_id, name_key, name, qty, category, store_id, photo_key, times, last_at)
+      `INSERT INTO products (id, household_id, name_key, name, qty, category, store_ids, photo_key, times, last_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
        ON CONFLICT (household_id, name_key) DO UPDATE SET
          name = excluded.name, qty = excluded.qty, category = excluded.category,
-         store_id = excluded.store_id,
+         store_ids = excluded.store_ids,
          -- Sin foto en el artículo, se conserva la que ya tenía el producto.
          photo_key = COALESCE(excluded.photo_key, products.photo_key),
          times = products.times + (CASE WHEN products.last_at < ? THEN 1 ELSE 0 END),
@@ -128,7 +146,7 @@ export async function recordPurchase(householdId: string, itemId: string) {
       item.name.trim(),
       item.qty,
       item.category,
-      item.store_id,
+      item.store_ids,
       item.photo_key,
       t,
       t - SAME_PURCHASE_MS,
@@ -140,14 +158,14 @@ export async function listItems(householdId: string): Promise<Item[]> {
   const db = await getDb();
   const { results } = await db
     .prepare(
-      `SELECT id, name, qty, category, note, store_id, photo_key, price, done,
+      `SELECT id, name, qty, category, note, store_ids, photo_key, price, done,
               sort_order, created_at, updated_at
        FROM items WHERE household_id = ?
        ORDER BY done, sort_order, name COLLATE NOCASE`,
     )
     .bind(householdId)
-    .all<Item>();
-  return results ?? [];
+    .all<Omit<Item, "store_ids"> & { store_ids: string }>();
+  return (results ?? []).map((i) => ({ ...i, store_ids: parseIds(i.store_ids) }));
 }
 
 /** Guarda el último precio visto de un producto en una tienda. */

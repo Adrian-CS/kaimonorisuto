@@ -5,9 +5,10 @@ import { deletePhotoIfUnused } from "@/lib/photos";
 import {
   ensureCategory,
   ownPhotoKey,
-  ownStoreId,
   recordPurchase,
   rememberPrice,
+  parseIds,
+  storeIdsFromBody,
 } from "@/lib/queries";
 
 export const dynamic = "force-dynamic";
@@ -36,9 +37,10 @@ export const PATCH = handler(async (req: Request, ctx: Ctx) => {
       values.push(opt(body[f]));
     }
   }
-  if ("store_id" in body) {
-    sets.push("store_id = ?");
-    values.push(await ownStoreId(me.householdId, body.store_id));
+  const storeIds = await storeIdsFromBody(me.householdId, body);
+  if (storeIds) {
+    sets.push("store_ids = ?");
+    values.push(JSON.stringify(storeIds));
   }
   if ("photo_key" in body) {
     sets.push("photo_key = ?");
@@ -97,14 +99,14 @@ export const PATCH = handler(async (req: Request, ctx: Ctx) => {
   // Recuerda el precio para la próxima vez que se añada este producto.
   if (typeof body.price === "number" && body.price > 0) {
     const row = await db
-      .prepare("SELECT name, store_id FROM items WHERE id = ?")
+      .prepare("SELECT name, store_ids FROM items WHERE id = ?")
       .bind(id)
-      .first<{ name: string; store_id: string | null }>();
+      .first<{ name: string; store_ids: string }>();
     if (row)
       await rememberPrice(
         me.householdId,
         row.name,
-        row.store_id,
+        parseIds(row.store_ids)[0] ?? null, // el precio va con la tienda principal
         Math.round(body.price),
       );
   }

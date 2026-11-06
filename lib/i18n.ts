@@ -142,6 +142,8 @@ const es = {
     "¿Borrar «{name}»? Sus artículos se quedarán sin categoría.",
   "category.new": "+ Nueva categoría…",
   "store.new": "+ Nuevo supermercado…",
+  "store.alsoIn": "también en {names}",
+  "store.pick": "Supermercados donde comprarlo",
   "settings.categories": "Categorías",
   "settings.categoriesHelp":
     "Se crean una vez y luego se eligen en cada artículo. El orden de esta lista es el orden al agrupar por categoría.",
@@ -323,6 +325,8 @@ const ja: Record<Key, string> = {
     "「{name}」を削除しますか？ このカテゴリの商品はカテゴリなしになります。",
   "category.new": "＋ 新しいカテゴリ…",
   "store.new": "＋ 新しいお店…",
+  "store.alsoIn": "{names}にもあります",
+  "store.pick": "買えるお店",
   "settings.categories": "カテゴリ",
   "settings.categoriesHelp":
     "一度作れば、商品ごとに選ぶだけです。ここの並び順が、カテゴリ別表示の並び順になります。",

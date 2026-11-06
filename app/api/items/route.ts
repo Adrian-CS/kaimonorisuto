@@ -1,7 +1,7 @@
 import { requireMe } from "@/lib/auth";
 import { clientId, fail, handler, json, opt } from "@/lib/api";
 import { getDb, newId, now } from "@/lib/db";
-import { ensureCategory, ownPhotoKey, ownStoreId, recallPrice } from "@/lib/queries";
+import { ensureCategory, ownPhotoKey, recallPrice, storeIdsFromBody } from "@/lib/queries";
 import { notifyHousehold } from "@/lib/notify";
 import { sweepOrphanPhotos } from "@/lib/photos";
 
@@ -24,7 +24,7 @@ export const POST = handler(async (req: Request) => {
     .bind(id, me.householdId)
     .first<{ price: number | null }>();
   if (existing) return json({ id, price: existing.price });
-  const storeId = await ownStoreId(me.householdId, opt(body.store_id));
+  const storeIds = (await storeIdsFromBody(me.householdId, body)) ?? [];
   const rawCategory = opt(body.category);
   const category = rawCategory
     ? (await ensureCategory(me.householdId, rawCategory)).name
@@ -41,12 +41,12 @@ export const POST = handler(async (req: Request) => {
   const price =
     typeof body.price === "number"
       ? body.price
-      : await recallPrice(me.householdId, name, storeId);
+      : await recallPrice(me.householdId, name, storeIds[0] ?? null);
 
   await db
     .prepare(
       `INSERT INTO items
-        (id, household_id, name, qty, category, note, store_id, photo_key, price, done, sort_order, created_at, updated_at)
+        (id, household_id, name, qty, category, note, store_ids, photo_key, price, done, sort_order, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`,
     )
     .bind(
@@ -56,7 +56,7 @@ export const POST = handler(async (req: Request) => {
       opt(body.qty),
       category,
       opt(body.note),
-      storeId,
+      JSON.stringify(storeIds),
       ownPhotoKey(me.householdId, body.photo_key),
       price,
       sortOrder,
