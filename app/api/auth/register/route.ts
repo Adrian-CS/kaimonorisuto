@@ -1,6 +1,7 @@
 import { createSession, hashPassword } from "@/lib/auth";
 import { fail, handler, json } from "@/lib/api";
 import { getDb, newCode, newId, now } from "@/lib/db";
+import { clientIp, isBlocked, recordFailure } from "@/lib/ratelimit";
 
 export const POST = handler(async (req: Request) => {
   const body = (await req.json()) as {
@@ -32,11 +33,18 @@ export const POST = handler(async (req: Request) => {
   let householdId: string;
 
   if (inviteCode) {
+    // Los códigos son cortos: sin límite se podrían ir probando hasta dar
+    // con la lista de otra casa.
+    const ipKey: Parameters<typeof isBlocked>[0] = [["code", clientIp(req)]];
+    if (await isBlocked(ipKey)) return fail("too_many_attempts", 429);
     const h = await db
       .prepare("SELECT id FROM households WHERE invite_code = ?")
       .bind(inviteCode)
       .first<{ id: string }>();
-    if (!h) return fail("invalid_code");
+    if (!h) {
+      await recordFailure(ipKey);
+      return fail("invalid_code");
+    }
     householdId = h.id;
   } else {
     householdId = newId();

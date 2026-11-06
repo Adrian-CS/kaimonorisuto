@@ -58,12 +58,16 @@ export async function createSession(userId: string) {
   const db = await getDb();
   const id = newId();
   const t = now();
-  await db
-    .prepare(
-      "INSERT INTO sessions (id, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)",
-    )
-    .bind(id, userId, t + SESSION_MS, t)
-    .run();
+  await db.batch([
+    // De paso, fuera las sesiones caducadas (si no, solo se borran cuando
+    // alguien vuelve a usar esa cookie, que puede ser nunca).
+    db.prepare("DELETE FROM sessions WHERE expires_at < ?").bind(t),
+    db
+      .prepare(
+        "INSERT INTO sessions (id, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)",
+      )
+      .bind(id, userId, t + SESSION_MS, t),
+  ]);
 
   const jar = await cookies();
   jar.set(COOKIE, id, {

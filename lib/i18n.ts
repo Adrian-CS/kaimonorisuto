@@ -175,6 +175,7 @@ const es = {
   "error.upload_failed": "No se ha podido subir la foto",
   "error.price_invalid": "Precio no válido",
   "error.unknown": "Algo ha ido mal",
+  "error.too_many_attempts": "Demasiados intentos fallidos. Espera un cuarto de hora y vuelve a probar.",
 } as const;
 
 export type Key = keyof typeof es;
@@ -344,6 +345,7 @@ const ja: Record<Key, string> = {
   "error.upload_failed": "写真をアップロードできませんでした",
   "error.price_invalid": "値段が正しくありません",
   "error.unknown": "エラーが発生しました",
+  "error.too_many_attempts": "失敗が多すぎます。15分ほど待ってから、もう一度お試しください。",
 };
 
 const DICTS: Record<Lang, Record<Key, string>> = { es, ja };
