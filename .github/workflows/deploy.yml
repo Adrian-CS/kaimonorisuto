@@ -1,25 +1,86 @@
-# Despliega a Cloudflare cada vez que algo entra en main (o a mano desde la
-# pestaña Actions). Primero aplica las migraciones de D1 pendientes, que es
-# idempotente, y luego hace el build de OpenNext y el deploy del Worker.
+# Pruebas y despliegue.
 #
-# Necesita en Settings → Secrets and variables → Actions:
+# - test: en cada push (a cualquier rama) y en cada PR. Tipos, lint, la prueba
+#   de cifrado de Web Push y el e2e completo con Playwright contra el bundle
+#   real de Workers en local (D1 y R2 simulados, sin tocar producción).
+# - deploy: solo en main, y solo si test ha pasado. Aplica las migraciones de
+#   D1 pendientes (idempotente) y despliega el Worker.
+#
+# El deploy necesita en Settings → Secrets and variables → Actions:
 #   CLOUDFLARE_API_TOKEN   (secret)  token con permisos de Workers Scripts,
 #                                    D1 y R2 (edición) sobre la cuenta
 #   CLOUDFLARE_ACCOUNT_ID  (secret o variable)  id de la cuenta
+# El job de test no usa ningún secret.
 name: Deploy
 
 on:
   push:
-    branches: [main]
+  pull_request:
   workflow_dispatch:
 
-concurrency:
-  group: deploy
-  cancel-in-progress: false
-
 jobs:
-  deploy:
+  test:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          # Sin esto se usa la 22.x que traiga la imagen del runner, que puede
+          # ir por detrás de los parches de seguridad de Node.
+          check-latest: true
+          cache: npm
+
+      - run: npm ci
+
+      - name: Tipos y lint
+        run: |
+          npx tsc --noEmit
+          npm run lint
+
+      - name: Cifrado de Web Push
+        run: node scripts/push-selftest.mjs
+
+      - name: Navegador para el e2e
+        run: npx playwright install --with-deps chromium
+
+      # Claves VAPID de usar y tirar, solo para este run: así el e2e prueba
+      # también la API de notificaciones.
+      - name: Preparar entorno local
+        run: |
+          { node scripts/vapid.mjs | grep '^VAPID_'; echo "VAPID_SUBJECT=mailto:e2e@example.com"; } > .dev.vars
+          npm run db:local
+          npx opennextjs-cloudflare build
+
+      - name: e2e
+        run: |
+          npx opennextjs-cloudflare preview > preview.log 2>&1 &
+          for i in $(seq 1 90); do
+            curl -s -o /dev/null http://localhost:8787/login && break
+            sleep 2
+          done
+          node e2e.mjs
+
+      # Si algo falla: las capturas de cada paso y el log del servidor.
+      - name: Capturas y log
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e
+          path: |
+            /tmp/lista-compra-e2e/shots
+            preview.log
+          retention-days: 7
+
+  deploy:
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: deploy
+      cancel-in-progress: false
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID || vars.CLOUDFLARE_ACCOUNT_ID }}
@@ -29,8 +90,6 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: 22
-          # Sin esto se usa la 22.x que traiga la imagen del runner, que puede
-          # ir por detrás de los parches de seguridad de Node.
           check-latest: true
           cache: npm
 
@@ -46,11 +105,6 @@ jobs:
           fi
 
       - run: npm ci
-
-      - name: Tipos y lint
-        run: |
-          npx tsc --noEmit
-          npm run lint
 
       # A qué cuentas tiene acceso el token. GitHub tapa con *** el valor de
       # CLOUDFLARE_ACCOUNT_ID, así que la cuenta configurada sale como ***:

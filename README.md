@@ -341,10 +341,17 @@ Settings → Domains & Routes → Add custom domain.
 
 ## Despliegue automático
 
-`.github/workflows/deploy.yml` despliega solo cada vez que algo entra en `main`
-(y se puede lanzar a mano desde la pestaña **Actions → Deploy → Run workflow**):
-aplica las migraciones de D1 pendientes, comprueba tipos y lint, y hace el
-deploy. Necesita en **Settings → Secrets and variables → Actions** del repo:
+`.github/workflows/deploy.yml` tiene dos pasos:
+
+- **test**, en cada push a cualquier rama y en cada PR: tipos, lint, la prueba
+  de cifrado de Web Push y el **e2e completo** con Playwright contra el bundle
+  real de Workers en local (D1 y R2 simulados, con claves VAPID de usar y tirar).
+  Si falla, deja las capturas y el log del servidor como artefacto del run.
+- **deploy**, solo en `main` y **solo si test ha pasado**: aplica las
+  migraciones de D1 pendientes y despliega. También se puede lanzar a mano desde
+  **Actions → Deploy → Run workflow**.
+
+El deploy necesita en **Settings → Secrets and variables → Actions** del repo:
 
 | Nombre | Tipo | Qué es |
 |---|---|---|
