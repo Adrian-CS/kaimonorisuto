@@ -35,6 +35,10 @@ const S = {
     add: "Añadir artículo…",
     settings: "Ajustes",
     storeName: "Nombre del supermercado",
+    frequent: "Lo de siempre",
+    frequentPick: (n) => `Elegir ${n}`,
+    frequentAdd: /^Añadir \(/,
+    frequentForget: (n) => `Olvidar ${n}`,
     enlarge: "Ver foto en grande",
     viewer: "Foto del artículo",
     categoryName: "Nombre de la categoría",
@@ -91,6 +95,10 @@ const S = {
     add: "商品を追加…",
     settings: "設定",
     storeName: "お店の名前",
+    frequent: "いつもの",
+    frequentPick: (n) => `${n}を選択`,
+    frequentAdd: /^追加（/,
+    frequentForget: (n) => `${n}を削除`,
     enlarge: "写真を大きく表示",
     viewer: "商品の写真",
     categoryName: "カテゴリの名前",
@@ -893,6 +901,89 @@ async function run(browser, lang, s) {
     if (added.length !== 1) throw new Error(`«Sin cobertura» x${added.length}`);
     if (snap.items.find((x) => x.name === "Fanta limón").done === fantaWas)
       throw new Error("el cambio de Fanta limón no llegó");
+  });
+
+  // Ayudas para los pasos de frecuentes.
+  const snapshot = async () => (await page.request.get(`${BASE}/api/snapshot`)).json();
+  const pendingNamed = async (name) =>
+    (await snapshot()).items.filter((x) => x.name === name && !x.done);
+
+  await step("frecuentes: comprar algo lo guarda con sus datos", async () => {
+    let snap = await snapshot();
+    const nutella = snap.items.find((x) => x.name === "Nutella");
+    await page.request.patch(`${BASE}/api/items/${nutella.id}`, { data: { done: 0 } });
+    await page.request.patch(`${BASE}/api/items/${nutella.id}`, { data: { done: 1 } });
+    snap = await snapshot();
+    const p = snap.products.find((x) => x.name === "Nutella");
+    if (!p) throw new Error("Nutella no está en el histórico");
+    for (const k of ["photo_key", "store_id", "category", "qty"])
+      if (p[k] !== nutella[k]) throw new Error(`${k}: ${p[k]} ≠ ${nutella[k]}`);
+    // Borrar el artículo no se lleva la foto: el histórico la conserva.
+    await page.request.delete(`${BASE}/api/items/${nutella.id}`);
+    if ((await page.request.get(`${BASE}/api/photos/${p.photo_key}`)).status() !== 200)
+      throw new Error("se ha borrado la foto que usa el histórico");
+  });
+
+  await step("frecuentes: sugerencia al escribir, con todo puesto", async () => {
+    await page.reload({ waitUntil: "networkidle" });
+    await page.getByPlaceholder(s.add).fill("nut");
+    const option = page.getByRole("option").filter({ hasText: "Nutella" });
+    await option.waitFor();
+    await page.screenshot({ path: `${SHOTS}/${lang}-08-sugerencias.png` });
+    await option.getByRole("button").click();
+    await page.waitForTimeout(800);
+    const [added] = await pendingNamed("Nutella");
+    const p = (await snapshot()).products.find((x) => x.name === "Nutella");
+    if (!added || added.photo_key !== p.photo_key || added.store_id !== p.store_id ||
+        added.category !== p.category || added.qty !== p.qty)
+      throw new Error(`no viene relleno: ${JSON.stringify(added)}`);
+    if ((await page.getByPlaceholder(s.add).inputValue()) !== "")
+      throw new Error("el campo no se ha vaciado");
+    // Ya está pendiente: no se vuelve a sugerir.
+    await page.getByPlaceholder(s.add).fill("nut");
+    await page.waitForTimeout(300);
+    if (await page.getByRole("option").filter({ hasText: "Nutella" }).count())
+      throw new Error("sugiere algo que ya está en la lista");
+    await page.getByPlaceholder(s.add).fill("");
+    await page.request.delete(`${BASE}/api/items/${added.id}`);
+  });
+
+  await step("frecuentes: escribir el nombre exacto también lo rellena", async () => {
+    await page.reload({ waitUntil: "networkidle" });
+    await page.getByPlaceholder(s.add).fill("NUTELLA");
+    await page.keyboard.press("Enter");
+    await page.waitForTimeout(800);
+    const [added] = await pendingNamed("Nutella");
+    if (!added?.photo_key || !added.store_id) throw new Error(JSON.stringify(added));
+    await page.request.delete(`${BASE}/api/items/${added.id}`);
+  });
+
+  await step("frecuentes: «Lo de siempre» añade varios de golpe", async () => {
+    // Otro producto comprado para tener dos donde elegir.
+    const id = crypto.randomUUID();
+    await page.request.post(`${BASE}/api/items`, { data: { id, name: "Yogur", qty: "4" } });
+    await page.request.patch(`${BASE}/api/items/${id}`, { data: { done: 1 } });
+    await page.request.delete(`${BASE}/api/items/${id}`);
+
+    await page.reload({ waitUntil: "networkidle" });
+    await page.getByRole("button", { name: s.frequent }).click();
+    await page.getByRole("button", { name: s.frequentPick("Nutella") }).click();
+    await page.getByRole("button", { name: s.frequentPick("Yogur") }).click();
+    await page.screenshot({ path: `${SHOTS}/${lang}-09-frecuentes.png` });
+    await page.getByRole("button", { name: s.frequentAdd }).click();
+    await page.waitForTimeout(1000);
+    const [n] = await pendingNamed("Nutella");
+    const [y] = await pendingNamed("Yogur");
+    if (!n?.photo_key || y?.qty !== "4") throw new Error(JSON.stringify({ n, y }));
+
+    // Olvidar uno: deja de sugerirse.
+    await page.getByRole("button", { name: s.frequent }).click();
+    await page.getByRole("button", { name: s.frequentForget("Yogur") }).click();
+    await page.waitForTimeout(800);
+    await page.getByRole("button", { name: s.close, exact: true }).click();
+    if ((await snapshot()).products.some((x) => x.name === "Yogur"))
+      throw new Error("Yogur sigue en el histórico");
+    await page.request.delete(`${BASE}/api/items/${y.id}`);
   });
 
   await step("una tienda que no es del hogar no rompe el cambio", async () => {

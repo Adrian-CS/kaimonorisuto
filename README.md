@@ -15,6 +15,9 @@ Todo lo demás es opcional: se puede usar escribiendo solo el nombre.
   de categoría.
 - **Categorías como las tiendas**: se crean una vez en Ajustes (o con el «+» de
   la ficha) y luego se eligen de una lista.
+- **Lo de siempre**: lo que habéis comprado otras veces se sugiere al escribir
+  (con su foto, tienda, categoría y cantidad) y se puede añadir en bloque desde
+  ⭐, sin rellenar nada otra vez.
 - **Cambios en bloque**: «Seleccionar», marcas varios artículos y les pones la
   misma categoría o el mismo supermercado de una vez.
 
@@ -216,6 +219,25 @@ soltar en otro grupo **le cambia la tienda** — es la forma rápida de clasific
 sin abrir la ficha. Con la vista por categoría pasa lo mismo con la categoría.
 Los grupos vacíos se pintan en gris justo para poder soltar ahí.
 
+## Lo de siempre (frecuentes)
+
+Al marcar un artículo como comprado se guarda en la tabla `products` (migración
+0006), uno por nombre, con su foto, tienda, categoría y cantidad, y cuántas veces
+se ha comprado (marcar y desmarcar seguido no cuenta dos veces). Ese histórico
+sobrevive a «Borrar los comprados», y su foto con él: R2 no la borra mientras
+algún producto la use.
+
+- **Al escribir** en «Añadir artículo…» salen los que encajan (primero los que
+  empiezan igual, luego los más comprados), sin repetir lo que ya está pendiente.
+  Un toque y se añade con todo puesto. Escribir el nombre exacto y pulsar Enter
+  hace lo mismo.
+- **⭐ Lo de siempre** abre la lista entera, lo más comprado primero: se marcan
+  varios y se añaden de golpe. Lo que ya está pendiente sale apagado. La ✕ de cada
+  fila lo quita del histórico (deja de sugerirse).
+- El precio no se copia del histórico: lo pone el servidor desde `price_memory`,
+  que ya prefería el de la tienda del artículo.
+- Va en el snapshot, así que las sugerencias funcionan también sin conexión.
+
 ## Categorías y cambios en bloque
 
 Las categorías funcionan como los supermercados: una lista del hogar, con orden
@@ -346,7 +368,9 @@ Settings → Domains & Routes → Add custom domain.
 - **test**, en cada push a cualquier rama y en cada PR: tipos, lint, la prueba
   de cifrado de Web Push y el **e2e completo** con Playwright contra el bundle
   real de Workers en local (D1 y R2 simulados, con claves VAPID de usar y tirar).
-  Si falla, deja las capturas y el log del servidor como artefacto del run.
+  Corre dentro de la imagen oficial de Playwright (misma versión que el
+  lockfile), que ya trae el navegador. Si falla, deja las capturas y el log del
+  servidor como artefacto del run.
 - **deploy**, solo en `main` y **solo si test ha pasado**: aplica las
   migraciones de D1 pendientes y despliega. También se puede lanzar a mano desde
   **Actions → Deploy → Run workflow**.

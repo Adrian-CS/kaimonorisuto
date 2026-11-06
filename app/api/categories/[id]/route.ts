@@ -51,6 +51,9 @@ export const PATCH = handler(async (req: Request, ctx: Ctx) => {
           )
           .bind(clash.name, now(), me.householdId, current.name),
         db
+          .prepare("UPDATE products SET category = ? WHERE household_id = ? AND category = ?")
+          .bind(clash.name, me.householdId, current.name),
+        db
           .prepare("DELETE FROM categories WHERE id = ? AND household_id = ?")
           .bind(id, me.householdId),
       ]);
@@ -66,6 +69,9 @@ export const PATCH = handler(async (req: Request, ctx: Ctx) => {
           "UPDATE items SET category = ?, updated_at = ? WHERE household_id = ? AND category = ?",
         )
         .bind(name, now(), me.householdId, current.name),
+      db
+        .prepare("UPDATE products SET category = ? WHERE household_id = ? AND category = ?")
+        .bind(name, me.householdId, current.name),
     );
   }
   if ("sort_order" in body) {
@@ -99,6 +105,9 @@ export const DELETE = handler(async (_req: Request, ctx: Ctx) => {
         "UPDATE items SET category = NULL, updated_at = ? WHERE household_id = ? AND category = ?",
       )
       .bind(now(), me.householdId, current.name),
+    db
+      .prepare("UPDATE products SET category = NULL WHERE household_id = ? AND category = ?")
+      .bind(me.householdId, current.name),
   ]);
   return json({ ok: true });
 });

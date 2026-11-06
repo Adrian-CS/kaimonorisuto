@@ -117,6 +117,16 @@ const es = {
 
   "drag.handle": "Mover {name}",
 
+  "frequent.title": "Lo de siempre",
+  "frequent.empty": "Aún no hay nada. Lo que marques como comprado aparecerá aquí para añadirlo de un toque.",
+  "frequent.search": "Buscar en lo comprado…",
+  "frequent.inList": "Ya está en la lista",
+  "frequent.add": "Añadir ({n})",
+  "frequent.pick": "Elegir {name}",
+  "frequent.forget": "Olvidar {name}",
+  "frequent.forgetConfirm": "¿Dejar de sugerir «{name}»?",
+  "suggest.aria": "Comprado otras veces",
+
   "sync.offline": "Sin conexión. Puedes seguir usando la lista: los cambios se mandan al volver.",
   "sync.pending": "{n} cambios por enviar",
   "sync.sending": "Enviando {n} cambios…",
@@ -287,6 +297,16 @@ const ja: Record<Key, string> = {
   "bell.off": "知らせずに追加",
 
   "drag.handle": "{name}を移動",
+
+  "frequent.title": "いつもの",
+  "frequent.empty": "まだありません。購入済みにした商品がここに並び、ワンタップで追加できます。",
+  "frequent.search": "買ったものから検索…",
+  "frequent.inList": "リストにあります",
+  "frequent.add": "追加（{n}）",
+  "frequent.pick": "{name}を選択",
+  "frequent.forget": "{name}を削除",
+  "frequent.forgetConfirm": "「{name}」を候補から外しますか？",
+  "suggest.aria": "前に買ったもの",
 
   "sync.offline": "オフラインです。このまま使えます。変更は接続が戻ったら送信されます。",
   "sync.pending": "未送信の変更：{n}件",

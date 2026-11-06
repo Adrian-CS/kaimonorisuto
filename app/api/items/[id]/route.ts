@@ -2,7 +2,13 @@ import { requireMe } from "@/lib/auth";
 import { fail, handler, json, opt } from "@/lib/api";
 import { getDb, now } from "@/lib/db";
 import { deletePhotoIfUnused } from "@/lib/photos";
-import { ensureCategory, ownPhotoKey, ownStoreId, rememberPrice } from "@/lib/queries";
+import {
+  ensureCategory,
+  ownPhotoKey,
+  ownStoreId,
+  recordPurchase,
+  rememberPrice,
+} from "@/lib/queries";
 
 export const dynamic = "force-dynamic";
 
@@ -81,6 +87,9 @@ export const PATCH = handler(async (req: Request, ctx: Ctx) => {
     .run();
 
   if (!res.meta.changes) return fail("not_found", 404);
+
+  // Comprado: entra (o se actualiza) en el histórico de frecuentes.
+  if ("done" in body && body.done) await recordPurchase(me.householdId, id);
 
   if (before?.photo_key && before.photo_key !== ownPhotoKey(me.householdId, body.photo_key))
     await deletePhotoIfUnused(me.householdId, before.photo_key);

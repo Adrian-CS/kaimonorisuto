@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ItemSheet, { type ItemPatch } from "./ItemSheet";
 import { useI18n } from "./I18n";
+import FrequentSheet from "./FrequentSheet";
 import MenuSheet from "./MenuSheet";
 import PhotoViewer from "./PhotoViewer";
 import { dropPushSubscription } from "./PushSettings";
@@ -17,13 +18,20 @@ import {
   type Op,
   type SendResult,
 } from "@/lib/outbox";
-import type { Category, Item, Snapshot, Store } from "@/lib/types";
+import type { Category, Item, Product, Snapshot, Store } from "@/lib/types";
 
 type GroupBy = "store" | "category" | "none";
 
 const SIN_SUPER = "__sin_super__";
 const SIN_CATEGORIA = "__sin_categoria__";
 const NUEVA = "__nueva__";
+
+type NewItem = Partial<Pick<Item, "qty" | "category" | "store_id" | "photo_key">> & {
+  name: string;
+};
+
+/** Para buscar sin mayúsculas, y con ancho completo/medio igualados (ｍｉｌｋ = milk). */
+const fold = (s: string) => s.normalize("NFKC").toLocaleLowerCase().trim();
 
 /** Intercambia una fila con su vecina y renumera el orden desde 1. */
 function swapOrder<T extends { id: string; sort_order: number }>(
@@ -83,6 +91,8 @@ export default function ListView({ initial }: { initial: Snapshot }) {
     initial.categories ?? [],
   );
   const [items, setItems] = useState<Item[]>(initial.items);
+  const [products, setProducts] = useState<Product[]>(initial.products ?? []);
+  const [frequentOpen, setFrequentOpen] = useState(false);
 
   const [groupBy, setGroupBy] = useState<GroupBy>("store");
   const [showDone, setShowDone] = useState(true);
@@ -188,6 +198,7 @@ export default function ListView({ initial }: { initial: Snapshot }) {
       setStores(data.stores);
       setCategories(data.categories ?? []);
       setItems(data.items);
+      setProducts(data.products ?? []);
     } catch {
       setNetDown(true); // sin conexión: se reintenta al siguiente tick
     }
@@ -206,6 +217,7 @@ export default function ListView({ initial }: { initial: Snapshot }) {
       setStores(cached.data.stores);
       setCategories(cached.data.categories ?? []);
       setItems(cached.data.items);
+      setProducts(cached.data.products ?? []);
     }
 
     let wasPending = ob.size > 0;
@@ -242,8 +254,8 @@ export default function ListView({ initial }: { initial: Snapshot }) {
 
   // Copia local de la lista, para abrirla sin conexión.
   useEffect(() => {
-    saveSnapshot<Snapshot>(householdId, { me, stores, categories, items });
-  }, [householdId, me, stores, categories, items]);
+    saveSnapshot<Snapshot>(householdId, { me, stores, categories, items, products });
+  }, [householdId, me, stores, categories, items, products]);
 
   useEffect(() => {
     const tick = () => {
@@ -272,35 +284,70 @@ export default function ListView({ initial }: { initial: Snapshot }) {
     dirty.current = Date.now();
   }
 
+  /** Producto del histórico con ese nombre exacto (sin mayúsculas), si hay. */
+  const productByName = (name: string) =>
+    products.find((p) => sameName(p.name, name));
+
   function addItem(e: React.FormEvent) {
     e.preventDefault();
     const name = draft.trim();
     if (!name) return;
-    const notify = notifyNext;
+    // Si ya se compró antes con ese mismo nombre, viene con todo puesto (y
+    // con el nombre como estaba guardado: «LECHE» no crea otro producto).
+    const known = productByName(name);
+    addFromFields(known ? productFields(known) : { name }, notifyNext);
     setDraft("");
     setNotifyNext(false); // la campana es de un solo uso
-    touch();
+  }
 
+  /** Lo que se copia de un producto del histórico a un artículo nuevo. */
+  function productFields(p: Product): NewItem {
+    return {
+      name: p.name,
+      qty: p.qty,
+      category: p.category,
+      // La tienda puede haberse borrado desde entonces.
+      store_id: stores.some((s) => s.id === p.store_id) ? p.store_id : null,
+      photo_key: p.photo_key,
+    };
+  }
+
+  function addFromProduct(p: Product) {
+    addFromFields(productFields(p), notifyNext);
+    setDraft("");
+    setNotifyNext(false);
+  }
+
+  /** Añade artículos ya rellenos (varios de golpe desde «Lo de siempre»). */
+  function addProducts(list: Product[]) {
+    for (const p of list) addFromFields(productFields(p), false);
+  }
+
+  function addFromFields(fields: NewItem, notify: boolean) {
+    touch();
     // El id se genera aquí para poder añadir sin conexión.
     const id = crypto.randomUUID();
     const t0 = Date.now();
     const item: Item = {
       id,
-      name,
-      qty: null,
-      category: null,
+      name: fields.name,
+      qty: fields.qty ?? null,
+      category: fields.category ?? null,
       note: null,
-      store_id: null,
-      photo_key: null,
+      store_id: fields.store_id ?? null,
+      photo_key: fields.photo_key ?? null,
       price: null,
       done: 0,
-      sort_order: Math.min(0, ...items.map((i) => i.sort_order)) - 1,
+      sort_order: 0, // se calcula abajo, sobre el estado más reciente
       created_at: t0,
       updated_at: t0,
     };
-    setItems((prev) => [item, ...prev]);
+    setItems((prev) => [
+      { ...item, sort_order: Math.min(0, ...prev.map((i) => i.sort_order)) - 1 },
+      ...prev,
+    ]);
 
-    void json("POST", "/api/items", { id, name, notify }).then((r) => {
+    void json("POST", "/api/items", { id, ...fields, notify }).then((r) => {
       if (r.status !== "sent") return;
       touch();
       setItems((prev) =>
@@ -311,6 +358,12 @@ export default function ListView({ initial }: { initial: Snapshot }) {
           : prev.filter((i) => i.id !== id),
       );
     });
+  }
+
+  function forgetProduct(id: string) {
+    touch();
+    setProducts((prev) => prev.filter((p) => p.id !== id));
+    void json("DELETE", `/api/products/${id}`);
   }
 
   /**
@@ -631,6 +684,22 @@ export default function ListView({ initial }: { initial: Snapshot }) {
 
   /* ---------- derivados ---------- */
 
+  // Sugerencias al escribir: lo comprado otras veces que encaje con lo escrito
+  // y que no esté ya pendiente en la lista. Primero lo que empieza igual.
+  const suggestions = useMemo(() => {
+    const q = fold(draft);
+    if (!q) return [];
+    const pending = new Set(items.filter((i) => !i.done).map((i) => fold(i.name)));
+    return products
+      .filter((p) => !pending.has(fold(p.name)) && fold(p.name).includes(q))
+      .sort(
+        (a, b) =>
+          Number(fold(b.name).startsWith(q)) - Number(fold(a.name).startsWith(q)) ||
+          b.times - a.times,
+      )
+      .slice(0, 6);
+  }, [draft, items, products]);
+
   const categoryNames = useMemo(
     () => categories.map((c) => c.name),
     [categories],
@@ -723,6 +792,12 @@ export default function ListView({ initial }: { initial: Snapshot }) {
       label === SIN_SUPER ? null : (stores.find((s) => s.name === label)?.id ?? null),
     [stores],
   );
+
+  /** «Mercadona · Lácteos · 2 bricks» para enseñar debajo de un producto. */
+  const productDetail = (p: Product) =>
+    [stores.find((s) => s.id === p.store_id)?.name, p.category, p.qty]
+      .filter(Boolean)
+      .join(" · ");
 
   /* ---------- arrastrar y soltar ---------- */
 
@@ -935,14 +1010,67 @@ export default function ListView({ initial }: { initial: Snapshot }) {
           </p>
         )}
 
-        <form onSubmit={addItem} className="mt-3 flex gap-2">
+        <form onSubmit={addItem} className="relative mt-3 flex gap-2">
           <input
             className="field"
             placeholder={t("list.add")}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => e.key === "Escape" && setDraft("")}
             enterKeyHint="done"
+            autoComplete="off"
+            role="combobox"
+            aria-expanded={suggestions.length > 0}
+            aria-controls="sugerencias"
           />
+          {suggestions.length > 0 && (
+            <ul
+              id="sugerencias"
+              role="listbox"
+              aria-label={t("suggest.aria")}
+              className="absolute top-full right-0 left-0 z-30 mt-1 overflow-hidden rounded-xl border border-border bg-surface shadow-lg"
+            >
+              {suggestions.map((p) => (
+                <li key={p.id} role="option" aria-selected={false}>
+                  <button
+                    type="button"
+                    // mousedown: que no se pierda el foco del campo antes del click
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => addFromProduct(p)}
+                    className="flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-surface-2"
+                  >
+                    {p.photo_key ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={`/api/photos/${p.photo_key}`}
+                        alt=""
+                        className="h-8 w-8 shrink-0 rounded-md object-cover"
+                      />
+                    ) : (
+                      <span className="grid h-8 w-8 shrink-0 place-items-center rounded-md bg-surface-2 text-xs text-muted">
+                        ↺
+                      </span>
+                    )}
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm">{p.name}</span>
+                      <span className="block truncate text-xs text-muted">
+                        {productDetail(p)}
+                      </span>
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          <button
+            type="button"
+            onClick={() => setFrequentOpen(true)}
+            aria-label={t("frequent.title")}
+            title={t("frequent.title")}
+            className="shrink-0 rounded-[0.625rem] border border-border px-3 text-lg"
+          >
+            ⭐
+          </button>
           <button
             type="button"
             onClick={() => setNotifyNext((v) => !v)}
@@ -1320,6 +1448,17 @@ export default function ListView({ initial }: { initial: Snapshot }) {
           onCreateCategory={createCategory}
           onNotify={() => notifyAbout(editing.id)}
           offline={offline}
+        />
+      )}
+
+      {frequentOpen && (
+        <FrequentSheet
+          products={products}
+          pendingNames={items.filter((i) => !i.done).map((i) => i.name)}
+          detail={productDetail}
+          onAdd={addProducts}
+          onForget={forgetProduct}
+          onClose={() => setFrequentOpen(false)}
         />
       )}
 

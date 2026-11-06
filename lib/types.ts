@@ -28,6 +28,18 @@ export type Item = {
   updated_at: number;
 };
 
+/** Algo que se ha comprado alguna vez (histórico, para «frecuentes»). */
+export type Product = {
+  id: string;
+  name: string;
+  qty: string | null;
+  category: string | null;
+  store_id: string | null;
+  photo_key: string | null;
+  times: number;
+  last_at: number;
+};
+
 export type Me = {
   userId: string;
   userName: string;
@@ -42,6 +54,7 @@ export type Snapshot = {
   stores: Store[];
   categories: Category[];
   items: Item[];
+  products?: Product[];
   /** Cuándo se generó en el servidor (para compararlo con la copia local). */
   servedAt?: number;
 };

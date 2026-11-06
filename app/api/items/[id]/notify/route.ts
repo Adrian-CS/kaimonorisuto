@@ -2,6 +2,7 @@ import { requireMe } from "@/lib/auth";
 import { fail, handler, json } from "@/lib/api";
 import { getDb, now } from "@/lib/db";
 import { notifyHousehold, type NotifyKind } from "@/lib/notify";
+import { recordPurchase } from "@/lib/queries";
 
 export const dynamic = "force-dynamic";
 
@@ -49,6 +50,7 @@ export const POST = handler(async (req: Request, ctx: Ctx) => {
       .bind(done, t, id)
       .run();
     kind = done ? "bought" : "back";
+    if (done) await recordPurchase(me.householdId, id);
   }
 
   if (item.notified_at && t - item.notified_at < COOLDOWN_MS) {

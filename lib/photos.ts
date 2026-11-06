@@ -7,12 +7,18 @@ function ownPrefix(householdId: string) {
   return `${PHOTO_PREFIX}/${householdId}/`;
 }
 
-/** Borra de R2 una foto del hogar si ya no la usa ningún artículo. */
+/**
+ * Borra de R2 una foto del hogar si ya no la usa ningún artículo ni ningún
+ * producto del histórico (que la conserva para volver a añadirlo).
+ */
 export async function deletePhotoIfUnused(householdId: string, key: string | null) {
   if (!key || !key.startsWith(ownPrefix(householdId))) return;
   const db = await getDb();
   const used = await db
-    .prepare("SELECT 1 FROM items WHERE photo_key = ? LIMIT 1")
+    .prepare(
+      `SELECT 1 FROM items WHERE photo_key = ?1
+       UNION ALL SELECT 1 FROM products WHERE photo_key = ?1 LIMIT 1`,
+    )
     .bind(key)
     .first();
   if (used) return;
@@ -30,7 +36,8 @@ export async function sweepOrphanPhotos(householdId: string) {
   const env = await getEnv();
   const { results } = await db
     .prepare(
-      "SELECT DISTINCT photo_key FROM items WHERE household_id = ? AND photo_key IS NOT NULL",
+      `SELECT photo_key FROM items WHERE household_id = ?1 AND photo_key IS NOT NULL
+       UNION SELECT photo_key FROM products WHERE household_id = ?1 AND photo_key IS NOT NULL`,
     )
     .bind(householdId)
     .all<{ photo_key: string }>();

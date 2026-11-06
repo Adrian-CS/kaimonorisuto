@@ -1,7 +1,7 @@
 import { PHOTO_PREFIX, getDb, newId, now } from "./db";
 import { sameName } from "./names";
 import { nameKey } from "./money";
-import type { Category, Item, Store } from "./types";
+import type { Category, Item, Product, Store } from "./types";
 
 export async function listStores(householdId: string): Promise<Store[]> {
   const db = await getDb();
@@ -75,6 +75,65 @@ export function ownPhotoKey(householdId: string, v: unknown): string | null {
   return typeof v === "string" && v.startsWith(`${PHOTO_PREFIX}/${householdId}/`)
     ? v
     : null;
+}
+
+/** Histórico de productos, lo más comprado primero. */
+export async function listProducts(householdId: string): Promise<Product[]> {
+  const db = await getDb();
+  const { results } = await db
+    .prepare(
+      `SELECT id, name, qty, category, store_id, photo_key, times, last_at
+       FROM products WHERE household_id = ?
+       ORDER BY times DESC, last_at DESC
+       LIMIT 500`,
+    )
+    .bind(householdId)
+    .all<Product>();
+  return results ?? [];
+}
+
+/** Marcar y desmarcar seguido no cuenta como varias compras. */
+const SAME_PURCHASE_MS = 6 * 60 * 60 * 1000;
+
+/**
+ * Al marcar un artículo como comprado, se guarda (o actualiza) en el
+ * histórico con sus datos actuales, para poder volver a añadirlo de un toque.
+ */
+export async function recordPurchase(householdId: string, itemId: string) {
+  const db = await getDb();
+  const item = await db
+    .prepare(
+      "SELECT name, qty, category, store_id, photo_key FROM items WHERE id = ? AND household_id = ?",
+    )
+    .bind(itemId, householdId)
+    .first<Pick<Item, "name" | "qty" | "category" | "store_id" | "photo_key">>();
+  if (!item?.name.trim()) return;
+  const t = now();
+  await db
+    .prepare(
+      `INSERT INTO products (id, household_id, name_key, name, qty, category, store_id, photo_key, times, last_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+       ON CONFLICT (household_id, name_key) DO UPDATE SET
+         name = excluded.name, qty = excluded.qty, category = excluded.category,
+         store_id = excluded.store_id,
+         -- Sin foto en el artículo, se conserva la que ya tenía el producto.
+         photo_key = COALESCE(excluded.photo_key, products.photo_key),
+         times = products.times + (CASE WHEN products.last_at < ? THEN 1 ELSE 0 END),
+         last_at = excluded.last_at`,
+    )
+    .bind(
+      newId(),
+      householdId,
+      nameKey(item.name),
+      item.name.trim(),
+      item.qty,
+      item.category,
+      item.store_id,
+      item.photo_key,
+      t,
+      t - SAME_PURCHASE_MS,
+    )
+    .run();
 }
 
 export async function listItems(householdId: string): Promise<Item[]> {

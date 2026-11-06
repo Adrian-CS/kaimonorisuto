@@ -19,9 +19,25 @@ on:
   workflow_dispatch:
 
 jobs:
+  # La imagen de Playwright ya trae el navegador y sus librerías; instalarlos
+  # en cada run llevaba 6-7 minutos. Su versión tiene que coincidir con la del
+  # paquete `playwright` del lockfile, así que se lee de ahí.
+  playwright:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: v
+        run: echo "version=$(node -p "require('./package-lock.json').packages['node_modules/playwright'].version")" >> "$GITHUB_OUTPUT"
+
   test:
+    needs: playwright
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    container:
+      image: mcr.microsoft.com/playwright:v${{ needs.playwright.outputs.version }}-noble
+      options: --ipc=host
     steps:
       - uses: actions/checkout@v6
 
@@ -43,9 +59,6 @@ jobs:
       - name: Cifrado de Web Push
         run: node scripts/push-selftest.mjs
 
-      - name: Navegador para el e2e
-        run: npx playwright install --with-deps chromium
-
       # Claves VAPID de usar y tirar, solo para este run: así el e2e prueba
       # también la API de notificaciones.
       - name: Preparar entorno local
@@ -57,10 +70,13 @@ jobs:
       - name: e2e
         run: |
           npx opennextjs-cloudflare preview > preview.log 2>&1 &
-          for i in $(seq 1 90); do
-            curl -s -o /dev/null http://localhost:8787/login && break
-            sleep 2
-          done
+          # Espera a que el servidor responda (la imagen no trae curl).
+          node -e '
+            const t0 = Date.now();
+            (async function wait() {
+              try { await fetch("http://localhost:8787/login"); process.exit(0); }
+              catch { if (Date.now() - t0 > 180000) process.exit(1); setTimeout(wait, 2000); }
+            })();'
           node e2e.mjs
 
       # Si algo falla: las capturas de cada paso y el log del servidor.
