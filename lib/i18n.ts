@@ -117,6 +117,26 @@ const es = {
 
   "drag.handle": "Mover {name}",
 
+  "settings.receipts": "Precios desde tickets",
+  "settings.receiptsHelp":
+    "Pásale a Claude la foto del ticket y pega aquí el texto que te devuelve. Antes de guardar verás qué precio va a cada artículo.",
+  "receipt.open": "Pegar precios",
+  "receipt.copyList": "Copiar mi lista",
+  "receipt.copied": "Lista copiada",
+  "receipt.title": "Pegar precios",
+  "receipt.help": "Una línea por artículo, con el precio al final. Puede empezar con «🧾 tienda fecha».",
+  "receipt.review": "Revisar",
+  "receipt.store": "Tienda del ticket",
+  "receipt.nothing": "No he encontrado ninguna línea con precio.",
+  "receipt.use": "Usar {name}",
+  "receipt.price": "Precio de {name}",
+  "receipt.item": "Artículo para {name}",
+  "receipt.notInList": "— No está en la lista —",
+  "receipt.skipped": "{n} líneas sin precio, ignoradas",
+  "receipt.back": "Atrás",
+  "receipt.save": "Guardar {n} precios",
+  "receipt.saved": "{n} precios guardados",
+
   "undo.action": "Deshacer",
   "undo.need": "«{name}» vuelve a la lista",
   "undo.have": "«{name}» tachado",
@@ -323,6 +343,26 @@ const ja: Record<Key, string> = {
   "bell.off": "知らせずに追加",
 
   "drag.handle": "{name}を移動",
+
+  "settings.receipts": "レシートから値段",
+  "settings.receiptsHelp":
+    "レシートの写真をClaudeに渡し、返ってきたテキストをここに貼り付けてください。保存する前に、どの商品にどの値段が入るか確認できます。",
+  "receipt.open": "値段を貼り付け",
+  "receipt.copyList": "リストをコピー",
+  "receipt.copied": "コピーしました",
+  "receipt.title": "値段を貼り付け",
+  "receipt.help": "1行に1商品、値段は最後に。最初の行に「🧾 お店 日付」を入れてもかまいません。",
+  "receipt.review": "確認する",
+  "receipt.store": "レシートのお店",
+  "receipt.nothing": "値段のある行が見つかりませんでした。",
+  "receipt.use": "{name}を使う",
+  "receipt.price": "{name}の値段",
+  "receipt.item": "{name}の商品",
+  "receipt.notInList": "— リストにない —",
+  "receipt.skipped": "値段のない{n}行は無視しました",
+  "receipt.back": "戻る",
+  "receipt.save": "{n}件の値段を保存",
+  "receipt.saved": "{n}件の値段を保存しました",
 
   "undo.action": "元に戻す",
   "undo.need": "「{name}」をリストに戻しました",

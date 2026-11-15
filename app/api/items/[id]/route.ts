@@ -102,11 +102,17 @@ export const PATCH = handler(async (req: Request, ctx: Ctx) => {
       .prepare("SELECT name, store_ids FROM items WHERE id = ?")
       .bind(id)
       .first<{ name: string; store_ids: string }>();
+    // Si viene de un ticket, `price_store_id` dice de qué tienda es; si no,
+    // el precio va con la tienda principal del artículo.
+    const fromReceipt =
+      typeof body.price_store_id === "string"
+        ? (await storeIdsFromBody(me.householdId, { store_ids: [body.price_store_id] }))?.[0]
+        : undefined;
     if (row)
       await rememberPrice(
         me.householdId,
         row.name,
-        parseIds(row.store_ids)[0] ?? null, // el precio va con la tienda principal
+        fromReceipt ?? parseIds(row.store_ids)[0] ?? null,
         Math.round(body.price),
       );
   }

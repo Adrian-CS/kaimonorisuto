@@ -15,6 +15,8 @@ Todo lo demás es opcional: se puede usar escribiendo solo el nombre.
   de categoría.
 - **Categorías como las tiendas**: se crean una vez en Ajustes (o con el «+» de
   la ficha) y luego se eligen de una lista.
+- **Precios desde tickets**: Claude lee la foto del ticket y la app pega los
+  precios en la lista, con revisión antes de guardar.
 - **Deshacer**: tachar, destachar, borrar o «Borrar los comprados» se pueden
   deshacer durante unos segundos.
 - **Repaso**: toda la lista como fichas compactas por categoría, para ver de
@@ -229,6 +231,33 @@ Como un artículo puede estar en varias tiendas, soltarlo en otra **le añade**
 esa tienda (sigue en las que tenía); soltarlo en «Sin supermercado» se las
 quita todas. Para quitarle solo una, desde la ficha.
 Los grupos vacíos se pintan en gris justo para poder soltar ahí.
+
+## Precios desde tickets
+
+Sin API ni coste: la foto la lee Claude en una conversación, y la app solo
+recibe el texto ya limpio. En **Ajustes → Precios desde tickets**:
+
+- **Copiar mi lista** copia los nombres de la lista y del histórico, uno por
+  línea, para pasárselos a Claude junto con las fotos: así devuelve los nombres
+  tal y como están en la lista.
+- **Pegar precios** recibe ese texto, con este formato (`lib/receipt.ts`):
+
+  ```
+  🧾 西友 2026-11-14
+  牛乳 238
+  卵 268円
+  ```
+
+  Una línea por artículo con el precio al final (precio final, con impuestos y
+  descuentos ya aplicados). La primera línea, opcional, dice la tienda y la
+  fecha. Las líneas sin precio se ignoran y se enseñan aparte.
+- **Revisión**: cada línea sale emparejada con el artículo del mismo nombre o,
+  si no hay, con el que contiene al otro («牛乳» ↔ «低脂肪牛乳»). Se puede cambiar
+  el artículo, corregir el precio o desmarcar la línea. Nada se guarda hasta
+  pulsar «Guardar».
+- Al guardar, si se reconoce la tienda del ticket, el precio queda recordado
+  **para esa tienda** (`price_store_id` en el PATCH), no para la principal del
+  artículo. Se puede deshacer como cualquier cambio.
 
 ## Deshacer y repaso
 

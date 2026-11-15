@@ -38,6 +38,11 @@ const S = {
     alsoIn: (n) => `también en ${n}`,
     shopStart: "🛒 En la tienda",
     undo: "Deshacer",
+    receiptOpen: "🧾 Pegar precios",
+    receiptReview: "Revisar",
+    receiptSave: /^Guardar \d+ precios$/,
+    copyList: "Copiar mi lista",
+    copied: "Lista copiada",
     review: "Repaso",
     reviewDone: "Listo",
     reviewToggle: (n) => `${n}: hace falta`,
@@ -107,6 +112,11 @@ const S = {
     alsoIn: (n) => `${n}にもあります`,
     shopStart: "🛒 買い物中",
     undo: "元に戻す",
+    receiptOpen: "🧾 値段を貼り付け",
+    receiptReview: "確認する",
+    receiptSave: /^\d+件の値段を保存$/,
+    copyList: "リストをコピー",
+    copied: "コピーしました",
     review: "見直し",
     reviewDone: "完了",
     reviewToggle: (n) => `${n}：必要`,
@@ -1152,6 +1162,42 @@ async function run(browser, lang, s) {
       throw new Error("no coincide con el servidor");
     await page.getByRole("button", { name: s.reviewDone, exact: true }).click();
     await page.locator("main ul li", { hasText: "Papel Albal" }).first().waitFor();
+  });
+
+  await step("pegar precios de un ticket", async () => {
+    await page.reload({ waitUntil: "networkidle" });
+    let snap = await snapshot();
+    const storeA = snap.stores.find((x) => x.name === s.storeA).id;
+    const minor = (n) => (snap.me.currency === "EUR" ? n * 100 : n);
+
+    // Copiar la lista (para pasársela a Claude).
+    await ctx.grantPermissions(["clipboard-read", "clipboard-write"]);
+    await page.getByRole("button", { name: s.settings }).click();
+    await page.getByRole("button", { name: s.copyList }).click();
+    await page.getByRole("button", { name: s.copied }).waitFor();
+    const clip = await page.evaluate(() => navigator.clipboard.readText());
+    if (!clip.split("\n").includes("Papel Albal")) throw new Error(`portapapeles: ${clip.slice(0, 80)}`);
+
+    await page.getByRole("button", { name: s.receiptOpen }).click();
+    await page.locator("#receipt-text").fill(
+      [`🧾 ${s.storeA} 2026-11-14`, "Nutella ¥1,500", "papel albal 300円", "No existe 100", "合計"].join("\n"),
+    );
+    await page.getByRole("button", { name: s.receiptReview }).click();
+    await page.screenshot({ path: `${SHOTS}/${lang}-15-ticket.png` });
+    await page.getByRole("button", { name: s.receiptSave }).click();
+    await page.waitForTimeout(1200);
+
+    snap = await snapshot();
+    // Puede haber más de un artículo con el mismo nombre: basta con que uno lo tenga.
+    const has = (n, p) => snap.items.some((x) => x.name === n && x.price === p);
+    if (!has("Nutella", minor(1500))) throw new Error("Nutella sin su precio");
+    if (!has("Papel Albal", minor(300))) throw new Error("Papel Albal sin su precio");
+    if (snap.items.some((x) => x.name === "No existe")) throw new Error("ha creado un artículo");
+    // El precio queda recordado para la tienda del ticket.
+    const rec = await (await page.request.get(
+      `${BASE}/api/prices?name=${encodeURIComponent("Papel Albal")}&store_id=${storeA}`,
+    )).json();
+    if (rec.price !== minor(300)) throw new Error(`recordado: ${rec.price}`);
   });
 
   await step("una tienda que no es del hogar no rompe el cambio", async () => {

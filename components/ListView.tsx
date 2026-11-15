@@ -6,6 +6,7 @@ import { useI18n } from "./I18n";
 import FrequentSheet from "./FrequentSheet";
 import MenuSheet from "./MenuSheet";
 import PhotoViewer from "./PhotoViewer";
+import ReceiptSheet from "./ReceiptSheet";
 import Sheet from "./Sheet";
 import { dropPushSubscription } from "./PushSettings";
 import { formatMoney, type Currency } from "@/lib/money";
@@ -116,6 +117,7 @@ export default function ListView({ initial }: { initial: Snapshot }) {
   const [items, setItems] = useState<Item[]>(initial.items);
   const [products, setProducts] = useState<Product[]>(initial.products ?? []);
   const [frequentOpen, setFrequentOpen] = useState(false);
+  const [receiptOpen, setReceiptOpen] = useState(false);
 
   // Modo tienda: dentro del súper, solo lo de esa tienda (y lo que no tiene
   // tienda), grande y por pasillos. Se recuerda por si se cierra la app.
@@ -755,6 +757,45 @@ export default function ListView({ initial }: { initial: Snapshot }) {
   }
 
   /* eslint-enable react-hooks/purity */
+
+  /* ---------- precios desde tickets ---------- */
+
+  /**
+   * Guarda los precios revisados de un ticket. Con la tienda del ticket, el
+   * precio se recuerda para esa tienda (no para la principal del artículo).
+   * Se puede deshacer, como cualquier cambio.
+   */
+  function applyReceipt(changes: { itemId: string; price: number }[], storeId: string | null) {
+    const before = new Map(items.map((i) => [i.id, i.price]));
+    touch();
+    setItems((prev) =>
+      prev.map((i) => {
+        const c = changes.find((x) => x.itemId === i.id);
+        return c ? { ...i, price: c.price, updated_at: Date.now() } : i;
+      }),
+    );
+    for (const c of changes)
+      void json("PATCH", `/api/items/${c.itemId}`, {
+        price: c.price,
+        ...(storeId && { price_store_id: storeId }),
+      });
+    offerUndo(t("receipt.saved", { n: changes.length }), () => {
+      for (const c of changes) patchItem(c.itemId, { price: before.get(c.itemId) ?? null });
+    });
+  }
+
+  /** Nombres de la lista y del histórico, uno por línea, para pasárselos a Claude. */
+  async function copyListNames() {
+    const names = [...new Set([...items, ...products].map((x) => x.name.trim()))]
+      .filter(Boolean)
+      .sort((a, b) => a.localeCompare(b, lang));
+    try {
+      await navigator.clipboard.writeText(names.join("\n"));
+      return true;
+    } catch {
+      return false;
+    }
+  }
 
   /* ---------- modo tienda ---------- */
 
@@ -1895,6 +1936,16 @@ export default function ListView({ initial }: { initial: Snapshot }) {
         </Sheet>
       )}
 
+      {receiptOpen && (
+        <ReceiptSheet
+          items={items}
+          stores={stores}
+          currency={me.currency}
+          onApply={applyReceipt}
+          onClose={() => setReceiptOpen(false)}
+        />
+      )}
+
       {frequentOpen && (
         <FrequentSheet
           products={products}
@@ -1924,6 +1975,11 @@ export default function ListView({ initial }: { initial: Snapshot }) {
           onClearDone={clearDone}
           onSetCurrency={setCurrency}
           onLogout={logout}
+          onOpenReceipt={() => {
+            setMenuOpen(false);
+            setReceiptOpen(true);
+          }}
+          onCopyList={copyListNames}
         />
       )}
     </main>

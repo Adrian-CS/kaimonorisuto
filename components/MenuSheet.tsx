@@ -24,6 +24,8 @@ export default function MenuSheet({
   onClearDone,
   onSetCurrency,
   onLogout,
+  onOpenReceipt,
+  onCopyList,
 }: {
   me: Me;
   stores: Store[];
@@ -41,9 +43,13 @@ export default function MenuSheet({
   onClearDone: () => unknown;
   onSetCurrency: (c: Currency) => unknown;
   onLogout: () => unknown;
+  onOpenReceipt: () => void;
+  /** Copia los nombres de la lista; true si se pudo. */
+  onCopyList: () => Promise<boolean>;
 }) {
   const { t } = useI18n();
   const [copied, setCopied] = useState(false);
+  const [listCopied, setListCopied] = useState(false);
 
   return (
     <Sheet title={t("settings.title")} onClose={onClose}>
@@ -102,6 +108,30 @@ export default function MenuSheet({
         onDelete={onDeleteCategory}
         onMove={onMoveCategory}
       />
+
+      <section className="mb-6">
+        <h3 className="mb-2 text-sm font-medium text-muted">
+          {t("settings.receipts")}
+        </h3>
+        <p className="mb-3 text-xs text-muted">{t("settings.receiptsHelp")}</p>
+        <div className="flex gap-2">
+          <button type="button" className="btn flex-1" onClick={onOpenReceipt}>
+            🧾 {t("receipt.open")}
+          </button>
+          <button
+            type="button"
+            className="btn flex-1"
+            onClick={async () => {
+              if (await onCopyList()) {
+                setListCopied(true);
+                setTimeout(() => setListCopied(false), 1500);
+              }
+            }}
+          >
+            {listCopied ? t("receipt.copied") : t("receipt.copyList")}
+          </button>
+        </div>
+      </section>
 
       <section className="mb-6">
         <h3 className="mb-2 text-sm font-medium text-muted">
