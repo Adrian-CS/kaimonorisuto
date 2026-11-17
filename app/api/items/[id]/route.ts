@@ -1,10 +1,12 @@
 import { requireMe } from "@/lib/auth";
 import { fail, handler, json, opt } from "@/lib/api";
 import { getDb, now } from "@/lib/db";
+import { nameKey } from "@/lib/money";
 import { deletePhotoIfUnused } from "@/lib/photos";
 import {
   ensureCategory,
   ownPhotoKey,
+  recordPrice,
   recordPurchase,
   rememberPrice,
   parseIds,
@@ -25,11 +27,17 @@ export const PATCH = handler(async (req: Request, ctx: Ctx) => {
   const sets: string[] = [];
   const values: (string | number | null)[] = [];
 
+  let renamed: { from: string; to: string } | null = null;
   if ("name" in body) {
     const name = opt(body.name);
     if (!name) return fail("item_name_required");
     sets.push("name = ?");
     values.push(name);
+    const old = await (await getDb())
+      .prepare("SELECT name FROM items WHERE id = ? AND household_id = ?")
+      .bind(id, me.householdId)
+      .first<{ name: string }>();
+    if (old && nameKey(old.name) !== nameKey(name)) renamed = { from: old.name, to: name };
   }
   for (const f of OPTIONAL_FIELDS) {
     if (f in body) {
@@ -90,6 +98,13 @@ export const PATCH = handler(async (req: Request, ctx: Ctx) => {
 
   if (!res.meta.changes) return fail("not_found", 404);
 
+  // Renombrar un artículo se lleva su historial de precios al nombre nuevo.
+  if (renamed)
+    await db
+      .prepare("UPDATE price_history SET name_key = ? WHERE household_id = ? AND name_key = ?")
+      .bind(nameKey(renamed.to), me.householdId, nameKey(renamed.from))
+      .run();
+
   // Comprado: entra (o se actualiza) en el histórico de frecuentes.
   if ("done" in body && body.done) await recordPurchase(me.householdId, id);
 
@@ -108,13 +123,16 @@ export const PATCH = handler(async (req: Request, ctx: Ctx) => {
       typeof body.price_store_id === "string"
         ? (await storeIdsFromBody(me.householdId, { store_ids: [body.price_store_id] }))?.[0]
         : undefined;
-    if (row)
-      await rememberPrice(
-        me.householdId,
-        row.name,
-        fromReceipt ?? parseIds(row.store_ids)[0] ?? null,
-        Math.round(body.price),
-      );
+    if (row) {
+      const store = fromReceipt ?? parseIds(row.store_ids)[0] ?? null;
+      const price = Math.round(body.price);
+      await rememberPrice(me.householdId, row.name, store, price);
+      // Y al historial, con lo que ponía el ticket si viene de uno («豚こま»
+      // apuntado en «肉»): de ahí sale la mediana que se enseña en la lista.
+      const label =
+        typeof body.price_label === "string" ? body.price_label.trim().slice(0, 80) || null : null;
+      await recordPrice(me.householdId, row.name, price, store, label);
+    }
   }
 
   return json({ ok: true });

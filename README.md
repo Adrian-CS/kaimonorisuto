@@ -258,6 +258,27 @@ recibe el texto ya limpio. En **Ajustes → Precios desde tickets**:
 - Al guardar, si se reconoce la tienda del ticket, el precio queda recordado
   **para esa tienda** (`price_store_id` en el PATCH), no para la principal del
   artículo. Se puede deshacer como cualquier cambio.
+- Las líneas que no están en la lista se pueden **añadir ya compradas** («+
+  Añadir a la lista (ya comprado)»): entran tachadas, con su precio y la tienda
+  del ticket, y pasan al histórico de frecuentes.
+
+### Historial de precios
+
+Cada precio que se apunta (a mano en la ficha o desde un ticket) se guarda en
+`price_history` (migración 0008) en vez de pisar el anterior, por nombre de
+artículo y con lo que ponía el ticket (`price_label`), la tienda y la fecha.
+
+- Con **dos o más** precios, la fila enseña la **mediana de las últimas 10
+  compras**, marcada con «≈»; los totales también la usan. Pensado para
+  artículos genéricos como «肉»: un día es 豚こま a 868 y otro もも a 1.382, y lo
+  útil es saber qué se suele pagar.
+- En la ficha, bajo el precio, se ve el resumen («Suele costar ≈868, entre 498
+  y 1.382») y cada compra con su etiqueta, tienda y fecha.
+- Corregir un precio enseguida (mismo artículo, etiqueta y tienda, menos de 10
+  minutos) cambia esa entrada en vez de añadir otra. Renombrar el artículo se
+  lleva su historial.
+- En un ticket se pueden asignar varias líneas al mismo artículo (las dos
+  carnes a «肉»): se guardan todas en el historial.
 
 ## Deshacer y repaso
 

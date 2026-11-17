@@ -29,6 +29,9 @@ function matchItem(name: string, items: Item[]): Item | null {
   return close[0] ?? null;
 }
 
+/** Valor del desplegable para «añadir a la lista, ya comprado». */
+const NEW = "__nuevo__";
+
 type Row = { name: string; itemId: string; price: string; on: boolean };
 
 /**
@@ -46,7 +49,16 @@ export default function ReceiptSheet({
   items: Item[];
   stores: Store[];
   currency: Currency;
-  onApply: (changes: { itemId: string; price: number }[], storeId: string | null) => void;
+  /**
+   * `changes`: precios para artículos de la lista (con lo que ponía el ticket,
+   * para el historial). `added`: líneas que no estaban en la lista y se añaden
+   * ya compradas.
+   */
+  onApply: (
+    changes: { itemId: string; price: number; label: string }[],
+    added: { name: string; price: number }[],
+    storeId: string | null,
+  ) => void;
   onClose: () => void;
 }) {
   const { t, lang } = useI18n();
@@ -77,10 +89,16 @@ export default function ReceiptSheet({
   const update = (i: number, patch: Partial<Row>) =>
     setRows((prev) => prev.map((r, j) => (j === i ? { ...r, ...patch } : r)));
 
-  const ready = rows
+  const priced = rows
     .filter((r) => r.on && r.itemId)
-    .map((r) => ({ itemId: r.itemId, price: parseMoney(r.price, currency) }))
-    .filter((c): c is { itemId: string; price: number } => c.price !== null);
+    .map((r) => ({ ...r, value: parseMoney(r.price, currency) }))
+    .filter((r): r is Row & { value: number } => r.value !== null);
+  const ready = priced
+    .filter((r) => r.itemId !== NEW)
+    .map((r) => ({ itemId: r.itemId, price: r.value, label: r.name }));
+  const added = priced
+    .filter((r) => r.itemId === NEW)
+    .map((r) => ({ name: r.name, price: r.value }));
 
   return (
     <Sheet title={t("receipt.title")} onClose={onClose}>
@@ -161,6 +179,7 @@ export default function ReceiptSheet({
                   aria-label={t("receipt.item", { name: r.name })}
                 >
                   <option value="">{t("receipt.notInList")}</option>
+                  <option value={NEW}>{t("receipt.addNew")}</option>
                   {byName.map((it) => (
                     <option key={it.id} value={it.id}>
                       → {it.name}
@@ -190,13 +209,13 @@ export default function ReceiptSheet({
             <button
               type="button"
               className="btn btn-primary flex-1"
-              disabled={ready.length === 0}
+              disabled={priced.length === 0}
               onClick={() => {
-                onApply(ready, storeId || null);
+                onApply(ready, added, storeId || null);
                 onClose();
               }}
             >
-              {t("receipt.save", { n: ready.length })}
+              {t("receipt.save", { n: priced.length })}
             </button>
           </div>
         </div>

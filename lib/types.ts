@@ -41,6 +41,24 @@ export type Product = {
   last_at: number;
 };
 
+/** Un precio apuntado: a mano, o desde una línea de ticket (`label`). */
+export type PriceEntry = {
+  label: string | null;
+  price: number;
+  store_id: string | null;
+  at: number;
+};
+
+/** Resumen del historial de un artículo: lo que se enseña en la lista. */
+export type PriceStats = {
+  median: number;
+  min: number;
+  max: number;
+  n: number;
+  /** Las últimas entradas, de la más reciente a la más antigua. */
+  recent: PriceEntry[];
+};
+
 export type Me = {
   userId: string;
   userName: string;
@@ -56,6 +74,8 @@ export type Snapshot = {
   categories: Category[];
   items: Item[];
   products?: Product[];
+  /** Historial de precios por nombre de artículo (nameKey). */
+  priceStats?: Record<string, PriceStats>;
   /** Cuándo se generó en el servidor (para compararlo con la copia local). */
   servedAt?: number;
 };

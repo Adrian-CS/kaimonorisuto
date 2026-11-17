@@ -117,6 +117,11 @@ const es = {
 
   "drag.handle": "Mover {name}",
 
+  "price.medianOf": "Mediana de {n} compras",
+  "price.summary": "Suele costar ≈{median} (entre {min} y {max}, {n} compras)",
+  "price.once": "Comprado una vez a {price}",
+  "receipt.addNew": "+ Añadir a la lista (ya comprado)",
+
   "settings.receipts": "Precios desde tickets",
   "settings.receiptsHelp":
     "Pásale a Claude la foto del ticket y pega aquí el texto que te devuelve. Antes de guardar verás qué precio va a cada artículo.",
@@ -343,6 +348,11 @@ const ja: Record<Key, string> = {
   "bell.off": "知らせずに追加",
 
   "drag.handle": "{name}を移動",
+
+  "price.medianOf": "{n}回の購入の中央値",
+  "price.summary": "だいたい≈{median}（{min}〜{max}、{n}回）",
+  "price.once": "前回 {price}",
+  "receipt.addNew": "＋ リストに追加（購入済み）",
 
   "settings.receipts": "レシートから値段",
   "settings.receiptsHelp":

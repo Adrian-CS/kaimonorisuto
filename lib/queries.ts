@@ -1,7 +1,7 @@
 import { PHOTO_PREFIX, getDb, newId, now } from "./db";
 import { sameName } from "./names";
 import { nameKey } from "./money";
-import type { Category, Item, Product, Store } from "./types";
+import type { Category, Item, PriceEntry, PriceStats, Product, Store } from "./types";
 
 export async function listStores(householdId: string): Promise<Store[]> {
   const db = await getDb();
@@ -185,6 +185,76 @@ export async function rememberPrice(
     )
     .bind(householdId, nameKey(name), storeId ?? "", price, now())
     .run();
+}
+
+/** Cuántas compras recientes cuentan para la mediana. */
+const STATS_WINDOW = 10;
+/** Corregir un precio enseguida no cuenta como otra compra. */
+const SAME_ENTRY_MS = 10 * 60 * 1000;
+
+/**
+ * Apunta un precio en el historial del artículo. Si es una corrección (mismo
+ * artículo, misma línea de ticket y tienda, hace menos de 10 minutos), cambia
+ * esa entrada en vez de añadir otra.
+ */
+export async function recordPrice(
+  householdId: string,
+  name: string,
+  price: number,
+  storeId: string | null,
+  label: string | null,
+) {
+  const db = await getDb();
+  const key = nameKey(name);
+  const t = now();
+  const last = await db
+    .prepare(
+      `SELECT id, label, store_id, at FROM price_history
+       WHERE household_id = ? AND name_key = ? ORDER BY at DESC LIMIT 1`,
+    )
+    .bind(householdId, key)
+    .first<{ id: string; label: string | null; store_id: string | null; at: number }>();
+  if (last && t - last.at < SAME_ENTRY_MS && last.label === label && last.store_id === storeId) {
+    await db.prepare("UPDATE price_history SET price = ?, at = ? WHERE id = ?").bind(price, t, last.id).run();
+    return;
+  }
+  await db
+    .prepare(
+      `INSERT INTO price_history (id, household_id, name_key, label, price, store_id, at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .bind(newId(), householdId, key, label, price, storeId, t)
+    .run();
+}
+
+/** Mediana, rango y últimas entradas de cada artículo con historial. */
+export async function listPriceStats(householdId: string): Promise<Record<string, PriceStats>> {
+  const db = await getDb();
+  const { results } = await db
+    .prepare(
+      `SELECT name_key, label, price, store_id, at FROM (
+         SELECT *, ROW_NUMBER() OVER (PARTITION BY name_key ORDER BY at DESC) AS rn
+         FROM price_history WHERE household_id = ?
+       ) WHERE rn <= ? ORDER BY name_key, at DESC`,
+    )
+    .bind(householdId, STATS_WINDOW)
+    .all<PriceEntry & { name_key: string }>();
+
+  const out: Record<string, PriceStats> = {};
+  for (const r of results ?? []) {
+    const s = (out[r.name_key] ??= { median: 0, min: 0, max: 0, n: 0, recent: [] });
+    s.recent.push({ label: r.label, price: r.price, store_id: r.store_id, at: r.at });
+  }
+  for (const s of Object.values(out)) {
+    const sorted = s.recent.map((e) => e.price).sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    s.n = sorted.length;
+    s.min = sorted[0];
+    s.max = sorted[sorted.length - 1];
+    s.median =
+      sorted.length % 2 ? sorted[mid] : Math.round((sorted[mid - 1] + sorted[mid]) / 2);
+  }
+  return out;
 }
 
 /**

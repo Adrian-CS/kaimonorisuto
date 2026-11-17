@@ -43,6 +43,7 @@ const S = {
     receiptSave: /^Guardar \d+ precios$/,
     copyList: "Copiar mi lista",
     copied: "Lista copiada",
+    receiptItem: (n) => `Artículo para ${n}`,
     review: "Repaso",
     reviewDone: "Listo",
     reviewToggle: (n) => `${n}: hace falta`,
@@ -117,6 +118,7 @@ const S = {
     receiptSave: /^\d+件の値段を保存$/,
     copyList: "リストをコピー",
     copied: "コピーしました",
+    receiptItem: (n) => `${n}の商品`,
     review: "見直し",
     reviewDone: "完了",
     reviewToggle: (n) => `${n}：必要`,
@@ -1198,6 +1200,34 @@ async function run(browser, lang, s) {
       `${BASE}/api/prices?name=${encodeURIComponent("Papel Albal")}&store_id=${storeA}`,
     )).json();
     if (rec.price !== minor(300)) throw new Error(`recordado: ${rec.price}`);
+  });
+
+  await step("historial de precios: mediana y añadir lo que no está", async () => {
+    // Otro ticket: el mismo artículo con otro nombre de línea y otro precio,
+    // y una línea nueva que se añade a la lista ya comprada.
+    await page.getByRole("button", { name: s.settings }).click();
+    await page.getByRole("button", { name: s.receiptOpen }).click();
+    await page.locator("#receipt-text").fill(["Papel Albal 30m 500", "Galletas María 150"].join("\n"));
+    await page.getByRole("button", { name: s.receiptReview }).click();
+    await page.getByLabel(s.receiptItem("Galletas María")).selectOption("__nuevo__");
+    await page.getByRole("button", { name: s.receiptSave }).click();
+    await page.waitForTimeout(1500);
+
+    const snap = await snapshot();
+    const minor = (n) => (snap.me.currency === "EUR" ? n * 100 : n);
+    const st = snap.priceStats["papel albal"];
+    if (!st || st.n < 2) throw new Error(`historial: ${JSON.stringify(st)}`);
+    if (st.median !== minor(400)) throw new Error(`mediana: ${st.median}`);
+    if (!st.recent.some((e) => e.label === "Papel Albal 30m")) throw new Error("falta la etiqueta del ticket");
+    const g = snap.items.find((x) => x.name === "Galletas María");
+    if (!g || !g.done || g.price !== minor(150)) throw new Error(`Galletas: ${JSON.stringify(g)}`);
+    if (!snap.products.some((x) => x.name === "Galletas María"))
+      throw new Error("no ha entrado en frecuentes");
+
+    // La fila enseña la mediana, marcada con ≈.
+    await page.reload({ waitUntil: "networkidle" });
+    const row = page.locator("main ul li", { hasText: "Papel Albal" }).first();
+    if (!(await row.textContent()).includes("≈")) throw new Error("la fila no enseña la mediana");
   });
 
   await step("una tienda que no es del hogar no rompe el cambio", async () => {

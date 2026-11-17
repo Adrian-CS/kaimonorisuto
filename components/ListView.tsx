@@ -9,7 +9,7 @@ import PhotoViewer from "./PhotoViewer";
 import ReceiptSheet from "./ReceiptSheet";
 import Sheet from "./Sheet";
 import { dropPushSubscription } from "./PushSettings";
-import { formatMoney, type Currency } from "@/lib/money";
+import { formatMoney, nameKey, type Currency } from "@/lib/money";
 import { errorText, type Key } from "@/lib/i18n";
 import { sameName } from "@/lib/names";
 import {
@@ -20,7 +20,7 @@ import {
   type Op,
   type SendResult,
 } from "@/lib/outbox";
-import type { Category, Item, Product, Snapshot, Store } from "@/lib/types";
+import type { Category, Item, PriceStats, Product, Snapshot, Store } from "@/lib/types";
 
 type GroupBy = "store" | "category" | "none";
 
@@ -116,6 +116,9 @@ export default function ListView({ initial }: { initial: Snapshot }) {
   );
   const [items, setItems] = useState<Item[]>(initial.items);
   const [products, setProducts] = useState<Product[]>(initial.products ?? []);
+  const [priceStats, setPriceStats] = useState<Record<string, PriceStats>>(
+    initial.priceStats ?? {},
+  );
   const [frequentOpen, setFrequentOpen] = useState(false);
   const [receiptOpen, setReceiptOpen] = useState(false);
 
@@ -245,6 +248,7 @@ export default function ListView({ initial }: { initial: Snapshot }) {
       setCategories(data.categories ?? []);
       setItems(normalizeItems(data.items).filter((i) => !hiddenIds.current.has(i.id)));
       setProducts(normalizeProducts(data.products ?? []));
+      setPriceStats(data.priceStats ?? {});
     } catch {
       setNetDown(true); // sin conexión: se reintenta al siguiente tick
     }
@@ -264,6 +268,7 @@ export default function ListView({ initial }: { initial: Snapshot }) {
       setCategories(cached.data.categories ?? []);
       setItems(normalizeItems(cached.data.items));
       setProducts(normalizeProducts(cached.data.products ?? []));
+      setPriceStats(cached.data.priceStats ?? {});
     }
 
     let wasPending = ob.size > 0;
@@ -300,8 +305,8 @@ export default function ListView({ initial }: { initial: Snapshot }) {
 
   // Copia local de la lista, para abrirla sin conexión.
   useEffect(() => {
-    saveSnapshot<Snapshot>(householdId, { me, stores, categories, items, products });
-  }, [householdId, me, stores, categories, items, products]);
+    saveSnapshot<Snapshot>(householdId, { me, stores, categories, items, products, priceStats });
+  }, [householdId, me, stores, categories, items, products, priceStats]);
 
   useEffect(() => {
     const tick = () => {
@@ -369,7 +374,8 @@ export default function ListView({ initial }: { initial: Snapshot }) {
     for (const p of list) addFromFields(productFields(p), false);
   }
 
-  function addFromFields(fields: NewItem, notify: boolean) {
+  /** Añade un artículo nuevo y devuelve su id (generado aquí, para poder hacerlo sin conexión). */
+  function addFromFields(fields: NewItem, notify: boolean): string {
     touch();
     // El id se genera aquí para poder añadir sin conexión.
     const id = crypto.randomUUID();
@@ -404,6 +410,7 @@ export default function ListView({ initial }: { initial: Snapshot }) {
           : prev.filter((i) => i.id !== id),
       );
     });
+    return id;
   }
 
   function forgetProduct(id: string) {
@@ -765,22 +772,49 @@ export default function ListView({ initial }: { initial: Snapshot }) {
    * precio se recuerda para esa tienda (no para la principal del artículo).
    * Se puede deshacer, como cualquier cambio.
    */
-  function applyReceipt(changes: { itemId: string; price: number }[], storeId: string | null) {
+  function applyReceipt(
+    changes: { itemId: string; price: number; label: string }[],
+    added: { name: string; price: number }[],
+    storeId: string | null,
+  ) {
     const before = new Map(items.map((i) => [i.id, i.price]));
     touch();
     setItems((prev) =>
       prev.map((i) => {
-        const c = changes.find((x) => x.itemId === i.id);
-        return c ? { ...i, price: c.price, updated_at: Date.now() } : i;
+        // Si un artículo recibe varias líneas («肉» ← 豚こま y もも), se queda
+        // con la última; el historial guarda todas.
+        const last = changes.filter((x) => x.itemId === i.id).at(-1);
+        return last ? { ...i, price: last.price, updated_at: Date.now() } : i;
       }),
     );
+    const receipt = { ...(storeId && { price_store_id: storeId }) };
     for (const c of changes)
       void json("PATCH", `/api/items/${c.itemId}`, {
         price: c.price,
-        ...(storeId && { price_store_id: storeId }),
+        price_label: c.label,
+        ...receipt,
       });
-    offerUndo(t("receipt.saved", { n: changes.length }), () => {
+
+    // Lo que no estaba en la lista entra ya comprado: así queda en el
+    // histórico (frecuentes y precios) sin aparecer como pendiente.
+    const newIds = added.map((a) => {
+      const id = addFromFields({ name: a.name, store_ids: storeId ? [storeId] : [] }, false);
+      setItems((prev) => prev.map((i) => (i.id === id ? { ...i, done: 1, price: a.price } : i)));
+      void json("PATCH", `/api/items/${id}`, {
+        done: 1,
+        price: a.price,
+        price_label: a.name,
+        ...receipt,
+      });
+      return id;
+    });
+
+    offerUndo(t("receipt.saved", { n: changes.length + added.length }), () => {
       for (const c of changes) patchItem(c.itemId, { price: before.get(c.itemId) ?? null });
+      for (const id of newIds) {
+        setItems((prev) => prev.filter((i) => i.id !== id));
+        void json("DELETE", `/api/items/${id}`);
+      }
     });
   }
 
@@ -1058,9 +1092,20 @@ export default function ListView({ initial }: { initial: Snapshot }) {
   const pending = items.filter((i) => !i.done).length;
   const doneCount = items.length - pending;
 
-  const anyPrice = items.some((i) => i.price !== null);
+  /**
+   * El precio que se enseña y se suma: con dos o más precios apuntados, la
+   * mediana de las últimas compras («肉» un día 868 y otro 1.382 ≈ lo normal);
+   * si no, el que tiene el artículo.
+   */
+  const shownPrice = (it: Item): { value: number | null; fromHistory: boolean } => {
+    const st = priceStats[nameKey(it.name)];
+    return st && st.n >= 2
+      ? { value: st.median, fromHistory: true }
+      : { value: it.price, fromHistory: false };
+  };
+  const anyPrice = items.some((i) => shownPrice(i).value !== null);
   const sumPending = (list: Item[]) =>
-    list.reduce((n, i) => (i.done ? n : n + (i.price ?? 0)), 0);
+    list.reduce((n, i) => (i.done ? n : n + (shownPrice(i).value ?? 0)), 0);
   const total = sumPending(items);
 
   const storeIdByLabel = useCallback(
@@ -1710,13 +1755,22 @@ export default function ListView({ initial }: { initial: Snapshot }) {
                           )}
                         </span>
 
-                        {it.price !== null && (
+                        {shownPrice(it).value !== null && (
                           <span
                             className={`shrink-0 text-xs tabular-nums ${
                               it.done ? "text-muted/50" : "text-muted"
                             }`}
+                            title={
+                              shownPrice(it).fromHistory
+                                ? t("price.medianOf", {
+                                    n: priceStats[nameKey(it.name)].n,
+                                  })
+                                : undefined
+                            }
                           >
-                            {formatMoney(it.price, me.currency, lang)}
+                            {/* ≈ = mediana de varias compras, no un precio fijo */}
+                            {shownPrice(it).fromHistory && "≈"}
+                            {formatMoney(shownPrice(it).value!, me.currency, lang)}
                           </span>
                         )}
                       </button>
@@ -1867,6 +1921,7 @@ export default function ListView({ initial }: { initial: Snapshot }) {
           onCreateCategory={createCategory}
           onNotify={() => notifyAbout(editing.id)}
           offline={offline}
+          history={priceStats[nameKey((items.find((i) => i.id === editing.id) ?? editing).name)]}
         />
       )}
 
