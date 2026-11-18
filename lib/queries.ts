@@ -1,6 +1,7 @@
 import { PHOTO_PREFIX, getDb, newId, now } from "./db";
 import { sameName } from "./names";
 import { nameKey } from "./money";
+import { summarize } from "./prices";
 import type { Category, Item, PriceEntry, PriceStats, Product, Store } from "./types";
 
 export async function listStores(householdId: string): Promise<Store[]> {
@@ -193,9 +194,16 @@ const STATS_WINDOW = 10;
 const SAME_ENTRY_MS = 10 * 60 * 1000;
 
 /**
- * Apunta un precio en el historial del artículo. Si es una corrección (mismo
- * artículo, misma línea de ticket y tienda, hace menos de 10 minutos), cambia
- * esa entrada en vez de añadir otra.
+ * Apunta un precio en el historial del artículo.
+ *
+ * - Con `at` (la fecha de un ticket), la compra queda en ese día. Si ya hay
+ *   una entrada igual (misma línea, tienda y día), se cambia esa: pegar el
+ *   mismo ticket dos veces no duplica.
+ * - Sin `at`, es de ahora. Si es una corrección (misma línea de ticket y
+ *   tienda, hace menos de 10 minutos), cambia esa entrada en vez de añadir otra.
+ *
+ * Devuelve si es la compra más reciente del artículo (un ticket atrasado no
+ * debe pisar el precio que se recuerda).
  */
 export async function recordPrice(
   householdId: string,
@@ -203,31 +211,56 @@ export async function recordPrice(
   price: number,
   storeId: string | null,
   label: string | null,
-) {
+  at: number | null = null,
+): Promise<boolean> {
   const db = await getDb();
   const key = nameKey(name);
-  const t = now();
-  const last = await db
+  const latest = await db
     .prepare(
       `SELECT id, label, store_id, at FROM price_history
        WHERE household_id = ? AND name_key = ? ORDER BY at DESC LIMIT 1`,
     )
     .bind(householdId, key)
     .first<{ id: string; label: string | null; store_id: string | null; at: number }>();
-  if (last && t - last.at < SAME_ENTRY_MS && last.label === label && last.store_id === storeId) {
-    await db.prepare("UPDATE price_history SET price = ?, at = ? WHERE id = ?").bind(price, t, last.id).run();
-    return;
+
+  let same: { id: string } | null = null;
+  if (at !== null) {
+    same = await db
+      .prepare(
+        `SELECT id FROM price_history
+         WHERE household_id = ? AND name_key = ? AND at = ?
+           AND label IS ? AND store_id IS ? LIMIT 1`,
+      )
+      .bind(householdId, key, at, label, storeId)
+      .first<{ id: string }>();
+  } else if (
+    latest &&
+    now() - latest.at < SAME_ENTRY_MS &&
+    latest.label === label &&
+    latest.store_id === storeId
+  ) {
+    same = latest;
   }
-  await db
-    .prepare(
-      `INSERT INTO price_history (id, household_id, name_key, label, price, store_id, at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .bind(newId(), householdId, key, label, price, storeId, t)
-    .run();
+  const when = at ?? now();
+
+  if (same)
+    await db.prepare("UPDATE price_history SET price = ?, at = ? WHERE id = ?").bind(price, when, same.id).run();
+  else
+    await db
+      .prepare(
+        `INSERT INTO price_history (id, household_id, name_key, label, price, store_id, at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .bind(newId(), householdId, key, label, price, storeId, when)
+      .run();
+  return !latest || when >= latest.at;
 }
 
-/** Mediana, rango y últimas entradas de cada artículo con historial. */
+/**
+ * Resumen de precios de cada artículo con historial (mediana de las últimas
+ * compras): va con cada refresco de la lista, así que solo lleva cuatro
+ * números por artículo. El detalle se pide al abrir la ficha.
+ */
 export async function listPriceStats(householdId: string): Promise<Record<string, PriceStats>> {
   const db = await getDb();
   const { results } = await db
@@ -240,21 +273,25 @@ export async function listPriceStats(householdId: string): Promise<Record<string
     .bind(householdId, STATS_WINDOW)
     .all<PriceEntry & { name_key: string }>();
 
-  const out: Record<string, PriceStats> = {};
-  for (const r of results ?? []) {
-    const s = (out[r.name_key] ??= { median: 0, min: 0, max: 0, n: 0, recent: [] });
-    s.recent.push({ label: r.label, price: r.price, store_id: r.store_id, at: r.at });
-  }
-  for (const s of Object.values(out)) {
-    const sorted = s.recent.map((e) => e.price).sort((a, b) => a - b);
-    const mid = Math.floor(sorted.length / 2);
-    s.n = sorted.length;
-    s.min = sorted[0];
-    s.max = sorted[sorted.length - 1];
-    s.median =
-      sorted.length % 2 ? sorted[mid] : Math.round((sorted[mid - 1] + sorted[mid]) / 2);
-  }
-  return out;
+  const byKey = new Map<string, PriceEntry[]>();
+  for (const r of results ?? []) byKey.set(r.name_key, [...(byKey.get(r.name_key) ?? []), r]);
+  return Object.fromEntries([...byKey].map(([k, list]) => [k, summarize(list)]));
+}
+
+/** Cuántas compras se enseñan como mucho en la ficha. */
+const HISTORY_LIMIT = 100;
+
+/** Historial de un artículo, de la compra más reciente a la más antigua. */
+export async function priceHistory(householdId: string, name: string): Promise<PriceEntry[]> {
+  const db = await getDb();
+  const { results } = await db
+    .prepare(
+      `SELECT label, price, store_id, at FROM price_history
+       WHERE household_id = ? AND name_key = ? ORDER BY at DESC LIMIT ?`,
+    )
+    .bind(householdId, nameKey(name), HISTORY_LIMIT)
+    .all<PriceEntry>();
+  return results ?? [];
 }
 
 /**

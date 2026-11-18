@@ -1,3 +1,4 @@
+import { receiptDate } from "@/lib/prices";
 import { requireMe } from "@/lib/auth";
 import { fail, handler, json, opt } from "@/lib/api";
 import { getDb, now } from "@/lib/db";
@@ -126,12 +127,16 @@ export const PATCH = handler(async (req: Request, ctx: Ctx) => {
     if (row) {
       const store = fromReceipt ?? parseIds(row.store_ids)[0] ?? null;
       const price = Math.round(body.price);
-      await rememberPrice(me.householdId, row.name, store, price);
-      // Y al historial, con lo que ponía el ticket si viene de uno («豚こま»
-      // apuntado en «肉»): de ahí sale la mediana que se enseña en la lista.
+      // Al historial, con lo que ponía el ticket si viene de uno («豚こま»
+      // apuntado en «肉») y el día del ticket: de ahí sale la mediana que se
+      // enseña en la lista.
       const label =
         typeof body.price_label === "string" ? body.price_label.trim().slice(0, 80) || null : null;
-      await recordPrice(me.householdId, row.name, price, store, label);
+      const newest = await recordPrice(
+        me.householdId, row.name, price, store, label, receiptDate(body.price_at),
+      );
+      // Un ticket atrasado no pisa el precio que se sugiere la próxima vez.
+      if (newest) await rememberPrice(me.householdId, row.name, store, price);
     }
   }
 

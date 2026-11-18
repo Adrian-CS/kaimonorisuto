@@ -58,6 +58,8 @@ export default function ReceiptSheet({
     changes: { itemId: string; price: number; label: string }[],
     added: { name: string; price: number }[],
     storeId: string | null,
+    /** Día del ticket («2026-11-14»): el historial lo guarda en esa fecha. */
+    date: string | null,
   ) => void;
   onClose: () => void;
 }) {
@@ -211,7 +213,7 @@ export default function ReceiptSheet({
               className="btn btn-primary flex-1"
               disabled={priced.length === 0}
               onClick={() => {
-                onApply(ready, added, storeId || null);
+                onApply(ready, added, storeId || null, receipt.date);
                 onClose();
               }}
             >

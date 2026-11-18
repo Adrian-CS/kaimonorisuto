@@ -55,8 +55,6 @@ export type PriceStats = {
   min: number;
   max: number;
   n: number;
-  /** Las últimas entradas, de la más reciente a la más antigua. */
-  recent: PriceEntry[];
 };
 
 export type Me = {

@@ -235,17 +235,24 @@ export default function ListView({ initial }: { initial: Snapshot }) {
   const json = (method: Op["method"], url: string, body?: unknown) =>
     send({ method, url, body });
 
+  const etag = useRef<string | null>(null);
   const refresh = useCallback(async (force = false) => {
     // Con cambios por mandar, lo del servidor está desfasado respecto a la
     // pantalla: primero se vacía la cola y luego se refresca.
     if (outbox.current?.size) return;
     if (!force && Date.now() - dirty.current < 1500) return;
     try {
-      const res = await fetch("/api/snapshot", { cache: "no-store" });
+      // Sin cambios desde la última vez, el servidor contesta 304 sin cuerpo.
+      // Forzado (al vaciarse la cola) se pide entero, por si acaso.
+      const res = await fetch("/api/snapshot", {
+        cache: "no-store",
+        headers: !force && etag.current ? { "If-None-Match": etag.current } : {},
+      });
       setNetDown(false);
       if (res.status === 401) return goToLogin();
-      if (!res.ok) return;
+      if (res.status === 304 || !res.ok) return;
       const data = (await res.json()) as Snapshot;
+      etag.current = res.headers.get("ETag");
       if (data.build && BUILD !== "dev" && data.build !== BUILD) setUpdateReady(true);
       if (outbox.current?.size || (!force && Date.now() - dirty.current < 1500))
         return;
@@ -803,6 +810,7 @@ export default function ListView({ initial }: { initial: Snapshot }) {
     changes: { itemId: string; price: number; label: string }[],
     added: { name: string; price: number }[],
     storeId: string | null,
+    date: string | null,
   ) {
     const before = new Map(items.map((i) => [i.id, i.price]));
     touch();
@@ -814,7 +822,10 @@ export default function ListView({ initial }: { initial: Snapshot }) {
         return last ? { ...i, price: last.price, updated_at: Date.now() } : i;
       }),
     );
-    const receipt = { ...(storeId && { price_store_id: storeId }) };
+    const receipt = {
+      ...(storeId && { price_store_id: storeId }),
+      ...(date && { price_at: date }),
+    };
     for (const c of changes)
       void json("PATCH", `/api/items/${c.itemId}`, {
         price: c.price,

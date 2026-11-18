@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import PhotoViewer from "./PhotoViewer";
+import PriceHistory from "./PriceHistory";
 import Sheet from "./Sheet";
 import { useI18n } from "./I18n";
 import { errorText, type Key } from "@/lib/i18n";
@@ -385,35 +386,7 @@ export default function ItemSheet({
             {history && history.n > 0 && (
               // Lo que ha costado otras veces: útil sobre todo en artículos
               // genéricos («肉»), donde cada compra es una cosa distinta.
-              <details className="rounded-lg bg-surface-2 px-3 py-2 text-xs text-muted">
-                <summary className="cursor-pointer">
-                  {history.n >= 2
-                    ? t("price.summary", {
-                        median: formatMoney(history.median, currency, lang),
-                        min: formatMoney(history.min, currency, lang),
-                        max: formatMoney(history.max, currency, lang),
-                        n: history.n,
-                      })
-                    : t("price.once", { price: formatMoney(history.min, currency, lang) })}
-                </summary>
-                <ul className="mt-2 flex flex-col gap-1">
-                  {history.recent.map((e, i) => (
-                    <li key={i} className="flex gap-2">
-                      <span className="shrink-0 tabular-nums">
-                        {new Date(e.at).toLocaleDateString(lang, { month: "short", day: "numeric" })}
-                      </span>
-                      <span className="min-w-0 flex-1 truncate">
-                        {[e.label, stores.find((st) => st.id === e.store_id)?.name]
-                          .filter(Boolean)
-                          .join(" · ")}
-                      </span>
-                      <span className="shrink-0 tabular-nums">
-                        {formatMoney(e.price, currency, lang)}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </details>
+              <PriceHistory name={opened.name} summary={history} stores={stores} currency={currency} />
             )}
             <input
               className="field"

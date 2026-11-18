@@ -1210,7 +1210,11 @@ async function run(browser, lang, s) {
     // y una línea nueva que se añade a la lista ya comprada.
     await page.getByRole("button", { name: s.settings }).click();
     await page.getByRole("button", { name: s.receiptOpen }).click();
-    await page.locator("#receipt-text").fill(["Papel Albal 30m 500", "Galletas María 150"].join("\n"));
+    // Con fecha de hace tres días y otra tienda: el historial lo guarda ese día.
+    const day = new Date(Date.now() - 3 * 86400000).toISOString().slice(0, 10);
+    await page.locator("#receipt-text").fill(
+      [`🧾 ${s.storeB} ${day}`, "Papel Albal 30m 500", "Galletas María 150"].join("\n"),
+    );
     await page.getByRole("button", { name: s.receiptReview }).click();
     await page.getByLabel(s.receiptItem("Galletas María")).selectOption("__nuevo__");
     await page.getByRole("button", { name: s.receiptSave }).click();
@@ -1221,7 +1225,22 @@ async function run(browser, lang, s) {
     const st = snap.priceStats["papel albal"];
     if (!st || st.n < 2) throw new Error(`historial: ${JSON.stringify(st)}`);
     if (st.median !== minor(400)) throw new Error(`mediana: ${st.median}`);
-    if (!st.recent.some((e) => e.label === "Papel Albal 30m")) throw new Error("falta la etiqueta del ticket");
+    if ("recent" in st) throw new Error("el refresco lleva el historial entero");
+    const history = async () =>
+      (await (await page.request.get(
+        `${BASE}/api/prices/history?name=${encodeURIComponent("Papel Albal")}`,
+      )).json()).entries;
+    const entries = await history();
+    const dated = entries.find((e) => e.label === "Papel Albal 30m");
+    if (!dated) throw new Error("falta la etiqueta del ticket");
+    if (new Date(dated.at).toISOString().slice(0, 10) !== day)
+      throw new Error(`fecha: ${new Date(dated.at).toISOString()} (ticket ${day})`);
+    // El mismo ticket otra vez no duplica.
+    const papelId = snap.items.find((x) => x.name === "Papel Albal").id;
+    await page.request.patch(`${BASE}/api/items/${papelId}`, {
+      data: { price: minor(500), price_label: "Papel Albal 30m", price_store_id: dated.store_id, price_at: day },
+    });
+    if ((await history()).length !== entries.length) throw new Error("ticket repetido duplicado");
     const g = snap.items.find((x) => x.name === "Galletas María");
     if (!g || !g.done || g.price !== minor(150)) throw new Error(`Galletas: ${JSON.stringify(g)}`);
     if (!snap.products.some((x) => x.name === "Galletas María"))
@@ -1231,6 +1250,22 @@ async function run(browser, lang, s) {
     await page.reload({ waitUntil: "networkidle" });
     const row = page.locator("main ul li", { hasText: "Papel Albal" }).first();
     if (!(await row.textContent()).includes("≈")) throw new Error("la fila no enseña la mediana");
+
+    // La ficha: por tienda y por tipo (dos tiendas, dos líneas de ticket).
+    await page.getByRole("button", { name: s.editItem("Papel Albal") }).first().click();
+    await page.locator("details summary", { hasText: "≈" }).click();
+    await page.getByTestId("price-by-store").waitFor();
+    await page.getByTestId("price-by-kind").waitFor();
+    await page.screenshot({ path: `${SHOTS}/${lang}-16-historial.png` });
+    await page.reload({ waitUntil: "networkidle" });
+  });
+
+  await step("el refresco sin cambios no descarga nada (304)", async () => {
+    const first = await page.request.get(`${BASE}/api/snapshot`);
+    const etag = first.headers()["etag"];
+    if (!etag) throw new Error("sin ETag");
+    const again = await page.request.get(`${BASE}/api/snapshot`, { headers: { "If-None-Match": etag } });
+    if (again.status() !== 304) throw new Error(`esperaba 304: ${again.status()}`);
   });
 
   await step("una tienda que no es del hogar no rompe el cambio", async () => {
