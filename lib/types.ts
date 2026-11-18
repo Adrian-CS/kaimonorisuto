@@ -79,3 +79,11 @@ export type Snapshot = {
   /** Versión del servidor que lo ha servido. */
   build?: string;
 };
+
+/** Qué hacer con una línea de ticket, aprendido de una revisión anterior. */
+export type ReceiptAlias = {
+  label_key: string;
+  kind: "item" | "new" | "skip";
+  /** Nombre del artículo, si kind = "item". */
+  target: string | null;
+};

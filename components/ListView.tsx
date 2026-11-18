@@ -808,7 +808,7 @@ export default function ListView({ initial }: { initial: Snapshot }) {
    */
   function applyReceipt(
     changes: { itemId: string; price: number; label: string }[],
-    added: { name: string; price: number }[],
+    added: { name: string; price: number; label: string }[],
     storeId: string | null,
     date: string | null,
   ) {
@@ -835,17 +835,27 @@ export default function ListView({ initial }: { initial: Snapshot }) {
 
     // Lo que no estaba en la lista entra ya comprado: así queda en el
     // histórico (frecuentes y precios) sin aparecer como pendiente.
-    const newIds = added.map((a) => {
-      const id = addFromFields({ name: a.name, store_ids: storeId ? [storeId] : [] }, false);
-      setItems((prev) => prev.map((i) => (i.id === id ? { ...i, done: 1, price: a.price } : i)));
+    // Varias líneas con el mismo nombre (豚こま y 鶏もも a un «肉» que ya no
+    // está en la lista) crean un solo artículo, con un precio por línea.
+    const newIds: string[] = [];
+    const byName = new Map<string, string>();
+    for (const a of added) {
+      const key = nameKey(a.name);
+      let id = byName.get(key);
+      if (!id) {
+        id = addFromFields({ name: a.name, store_ids: storeId ? [storeId] : [] }, false);
+        byName.set(key, id);
+        newIds.push(id);
+      }
+      const newId = id;
+      setItems((prev) => prev.map((i) => (i.id === newId ? { ...i, done: 1, price: a.price } : i)));
       void json("PATCH", `/api/items/${id}`, {
         done: 1,
         price: a.price,
-        price_label: a.name,
+        price_label: a.label,
         ...receipt,
       });
-      return id;
-    });
+    }
 
     offerUndo(t("receipt.saved", { n: changes.length + added.length }), () => {
       for (const c of changes) patchItem(c.itemId, { price: before.get(c.itemId) ?? null });
@@ -2048,6 +2058,7 @@ export default function ListView({ initial }: { initial: Snapshot }) {
           stores={stores}
           currency={me.currency}
           onApply={applyReceipt}
+          onLearn={(learned) => void json("POST", "/api/receipt-aliases", learned)}
           onClose={() => setReceiptOpen(false)}
         />
       )}

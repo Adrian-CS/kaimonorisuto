@@ -1,12 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Sheet from "./Sheet";
 import { useI18n } from "./I18n";
 import { sameName } from "@/lib/names";
 import { formatMoney, moneyToInput, parseMoney, type Currency } from "@/lib/money";
 import { parseReceiptText, type Receipt } from "@/lib/receipt";
-import type { Item, Store } from "@/lib/types";
+import { nameKey } from "@/lib/money";
+import type { Item, ReceiptAlias, Store } from "@/lib/types";
 
 const fold = (s: string) => s.normalize("NFKC").toLocaleLowerCase().replace(/\s+/g, "");
 
@@ -29,8 +30,23 @@ function matchItem(name: string, items: Item[]): Item | null {
   return close[0] ?? null;
 }
 
-/** Valor del desplegable para «añadir a la lista, ya comprado». */
+/**
+ * Valor del desplegable para «añadir a la lista, ya comprado»: solo, con el
+ * nombre de la línea; `__nuevo__:肉`, con otro nombre (una asociación
+ * aprendida cuyo artículo ya no está en la lista).
+ */
 const NEW = "__nuevo__";
+const NEW_AS = `${NEW}:`;
+
+/** Lo elegido para una línea, comparable con lo que sale solo. */
+type Choice = { kind: ReceiptAlias["kind"]; target: string | null };
+const sameChoice = (a: Choice, b: Choice) =>
+  a.kind === b.kind && nameKey(a.target ?? "") === nameKey(b.target ?? "");
+
+export type LearnedAliases = {
+  set: { label: string; kind: ReceiptAlias["kind"]; target: string | null }[];
+  del: string[];
+};
 
 type Row = { name: string; itemId: string; price: string; on: boolean };
 
@@ -44,6 +60,7 @@ export default function ReceiptSheet({
   stores,
   currency,
   onApply,
+  onLearn,
   onClose,
 }: {
   items: Item[];
@@ -56,11 +73,13 @@ export default function ReceiptSheet({
    */
   onApply: (
     changes: { itemId: string; price: number; label: string }[],
-    added: { name: string; price: number }[],
+    added: { name: string; price: number; label: string }[],
     storeId: string | null,
     /** Día del ticket («2026-11-14»): el historial lo guarda en esa fecha. */
     date: string | null,
   ) => void;
+  /** Lo ajustado a mano, para que la próxima vez salga ya así. */
+  onLearn: (learned: LearnedAliases) => void;
   onClose: () => void;
 }) {
   const { t, lang } = useI18n();
@@ -69,7 +88,41 @@ export default function ReceiptSheet({
   const [rows, setRows] = useState<Row[]>([]);
   const [storeId, setStoreId] = useState("");
 
+  // Asociaciones aprendidas de otras veces. Sin conexión no hay: se empareja
+  // solo por nombre, como siempre.
+  const [aliases, setAliases] = useState<Map<string, ReceiptAlias>>(new Map());
+  useEffect(() => {
+    let live = true;
+    fetch("/api/receipt-aliases", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : { aliases: [] }))
+      .then((d: { aliases: ReceiptAlias[] }) => {
+        if (live) setAliases(new Map(d.aliases.map((a) => [a.label_key, a])));
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
+
   const byName = [...items].sort((a, b) => a.name.localeCompare(b.name, lang));
+
+  /** Valor del desplegable para una línea: lo aprendido, o si no, por nombre. */
+  function pick(name: string, useAliases = true): string {
+    const a = useAliases ? aliases.get(nameKey(name)) : undefined;
+    if (a?.kind === "skip") return "";
+    if (a?.kind === "new") return items.find((i) => sameName(i.name, name))?.id ?? NEW;
+    if (a?.kind === "item" && a.target)
+      return items.find((i) => sameName(i.name, a.target!))?.id ?? NEW_AS + a.target;
+    return matchItem(name, items)?.id ?? "";
+  }
+
+  /** Qué significa un valor del desplegable, para comparar y aprender. */
+  function choiceOf(value: string): Choice {
+    if (value === "") return { kind: "skip", target: null };
+    if (value === NEW) return { kind: "new", target: null };
+    if (value.startsWith(NEW_AS)) return { kind: "item", target: value.slice(NEW_AS.length) };
+    return { kind: "item", target: items.find((i) => i.id === value)?.name ?? null };
+  }
 
   function review() {
     const r = parseReceiptText(text, currency);
@@ -77,15 +130,31 @@ export default function ReceiptSheet({
     setStoreId(r.store ? (stores.find((s) => sameName(s.name, r.store!))?.id ?? "") : "");
     setRows(
       r.lines.map((l) => {
-        const item = matchItem(l.name, items);
+        const itemId = pick(l.name);
         return {
           name: l.name,
-          itemId: item?.id ?? "",
+          itemId,
           price: moneyToInput(l.price, currency),
-          on: Boolean(item),
+          on: Boolean(itemId),
         };
       }),
     );
+  }
+
+  /**
+   * Lo que se ha elegido distinto de lo que saldría solo por nombre se
+   * recuerda; si se vuelve a lo de por nombre, se olvida lo aprendido.
+   */
+  function learned(): LearnedAliases {
+    const out: LearnedAliases = { set: [], del: [] };
+    for (const r of rows) {
+      const chosen = choiceOf(r.itemId);
+      if (chosen.kind === "item" && !chosen.target) continue;
+      if (!sameChoice(chosen, choiceOf(pick(r.name, false))))
+        out.set.push({ label: r.name, ...chosen });
+      else if (aliases.has(nameKey(r.name))) out.del.push(r.name);
+    }
+    return out;
   }
 
   const update = (i: number, patch: Partial<Row>) =>
@@ -95,12 +164,17 @@ export default function ReceiptSheet({
     .filter((r) => r.on && r.itemId)
     .map((r) => ({ ...r, value: parseMoney(r.price, currency) }))
     .filter((r): r is Row & { value: number } => r.value !== null);
+  const isNew = (id: string) => id === NEW || id.startsWith(NEW_AS);
   const ready = priced
-    .filter((r) => r.itemId !== NEW)
+    .filter((r) => !isNew(r.itemId))
     .map((r) => ({ itemId: r.itemId, price: r.value, label: r.name }));
   const added = priced
-    .filter((r) => r.itemId === NEW)
-    .map((r) => ({ name: r.name, price: r.value }));
+    .filter((r) => isNew(r.itemId))
+    .map((r) => ({
+      name: r.itemId === NEW ? r.name : r.itemId.slice(NEW_AS.length),
+      price: r.value,
+      label: r.name,
+    }));
 
   return (
     <Sheet title={t("receipt.title")} onClose={onClose}>
@@ -182,6 +256,11 @@ export default function ReceiptSheet({
                 >
                   <option value="">{t("receipt.notInList")}</option>
                   <option value={NEW}>{t("receipt.addNew")}</option>
+                  {r.itemId.startsWith(NEW_AS) && (
+                    <option value={r.itemId}>
+                      {t("receipt.addAs", { name: r.itemId.slice(NEW_AS.length) })}
+                    </option>
+                  )}
                   {byName.map((it) => (
                     <option key={it.id} value={it.id}>
                       → {it.name}
@@ -214,6 +293,8 @@ export default function ReceiptSheet({
               disabled={priced.length === 0}
               onClick={() => {
                 onApply(ready, added, storeId || null, receipt.date);
+                const l = learned();
+                if (l.set.length || l.del.length) onLearn(l);
                 onClose();
               }}
             >

@@ -1260,6 +1260,39 @@ async function run(browser, lang, s) {
     await page.reload({ waitUntil: "networkidle" });
   });
 
+  await step("pegar precios recuerda lo asociado a mano", async () => {
+    const paste = async (price) => {
+      await page.getByRole("button", { name: s.settings }).click();
+      await page.getByRole("button", { name: s.receiptOpen }).click();
+      await page.locator("#receipt-text").fill(`Crema cacao ${price}`);
+      await page.getByRole("button", { name: s.receiptReview }).click();
+      return page.getByLabel(s.receiptItem("Crema cacao"));
+    };
+    // Primera vez: no se parece a nada, se asocia a mano con Nutella.
+    let select = await paste(400);
+    await page.waitForTimeout(500); // que lleguen las asociaciones
+    if ((await select.inputValue()) !== "") throw new Error("ya venía asociada");
+    const label = (await select.locator("option").allTextContents()).find((x) => x.startsWith("→ Nutella"));
+    await select.selectOption({ label });
+    await page.getByRole("button", { name: s.receiptSave }).click();
+    await page.waitForTimeout(1200);
+    const { aliases } = await (await page.request.get(`${BASE}/api/receipt-aliases`)).json();
+    const a = aliases.find((x) => x.label_key === "crema cacao");
+    if (a?.kind !== "item" || a.target !== "Nutella") throw new Error(JSON.stringify(aliases));
+
+    // Segunda vez: ya sale con Nutella.
+    select = await paste(420);
+    await page.waitForFunction(
+      (sel) => document.querySelector(sel)?.selectedOptions[0]?.textContent?.startsWith("→ Nutella"),
+      `select[aria-label="${s.receiptItem("Crema cacao")}"]`,
+    );
+    await page.getByRole("button", { name: s.receiptSave }).click();
+    await page.waitForTimeout(1200);
+    const snap = await snapshot();
+    const minor = (n) => (snap.me.currency === "EUR" ? n * 100 : n);
+    if (!snap.items.some((x) => x.name === "Nutella" && x.price === minor(420))) throw new Error("Nutella sin el precio nuevo");
+  });
+
   await step("el refresco sin cambios no descarga nada (304)", async () => {
     const first = await page.request.get(`${BASE}/api/snapshot`);
     const etag = first.headers()["etag"];

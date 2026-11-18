@@ -127,6 +127,7 @@ const es = {
   "price.more": "Ver {n} más",
   "price.historyOffline": "Sin conexión: el historial se ve al volver.",
   "receipt.addNew": "+ Añadir a la lista (ya comprado)",
+  "receipt.addAs": "+ Añadir «{name}» (ya comprado)",
 
   "settings.receipts": "Precios desde tickets",
   "settings.receiptsHelp":
@@ -367,6 +368,7 @@ const ja: Record<Key, string> = {
   "price.more": "あと{n}件を表示",
   "price.historyOffline": "オフラインです。履歴は接続が戻ると表示されます。",
   "receipt.addNew": "＋ リストに追加（購入済み）",
+  "receipt.addAs": "＋「{name}」を追加（購入済み）",
 
   "settings.receipts": "レシートから値段",
   "settings.receiptsHelp":
