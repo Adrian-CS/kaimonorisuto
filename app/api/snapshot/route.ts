@@ -14,5 +14,8 @@ export const GET = handler(async () => {
     listProducts(me.householdId),
     listPriceStats(me.householdId),
   ]);
-  return json({ me, stores, categories, items, products, priceStats });
+  return json({
+    me, stores, categories, items, products, priceStats,
+    build: process.env.NEXT_PUBLIC_BUILD_ID,
+  });
 });

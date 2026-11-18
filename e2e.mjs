@@ -288,6 +288,9 @@ async function run(browser, lang, s) {
 
   await step("crear supermercados y categorías", async () => {
     await page.getByRole("button", { name: s.settings }).click();
+    // Número de versión al pie de Ajustes.
+    const version = await page.getByTestId("version").textContent();
+    if (!/^v \S+$/.test(version?.trim() ?? "")) throw new Error(`versión: ${version}`);
     for (const name of [s.storeA, s.storeB]) {
       await page.getByPlaceholder(s.storeName).fill(name);
       await page.getByRole("button", { name: s.addBtn, exact: true }).first().click();

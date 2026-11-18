@@ -76,6 +76,9 @@ function swapOrder<T extends { id: string; sort_order: number }>(
  * que esta página ya cargó, para que lo guarde: la primera vez la página se
  * carga antes de que él la controle.
  */
+/** Versión con la que se ha construido este código ("dev" en local). */
+const BUILD = process.env.NEXT_PUBLIC_BUILD_ID ?? "dev";
+
 async function registerServiceWorker() {
   if (!("serviceWorker" in navigator)) return;
   try {
@@ -121,6 +124,8 @@ export default function ListView({ initial }: { initial: Snapshot }) {
   );
   const [frequentOpen, setFrequentOpen] = useState(false);
   const [receiptOpen, setReceiptOpen] = useState(false);
+  /** El servidor ya tiene una versión más nueva que este código. */
+  const [updateReady, setUpdateReady] = useState(false);
 
   // Modo tienda: dentro del súper, solo lo de esa tienda (y lo que no tiene
   // tienda), grande y por pasillos. Se recuerda por si se cierra la app.
@@ -241,6 +246,7 @@ export default function ListView({ initial }: { initial: Snapshot }) {
       if (res.status === 401) return goToLogin();
       if (!res.ok) return;
       const data = (await res.json()) as Snapshot;
+      if (data.build && BUILD !== "dev" && data.build !== BUILD) setUpdateReady(true);
       if (outbox.current?.size || (!force && Date.now() - dirty.current < 1500))
         return;
       setMe(data.me);
@@ -325,6 +331,27 @@ export default function ListView({ initial }: { initial: Snapshot }) {
   }, [refresh, dragId]);
 
   const offline = netDown;
+
+  // Versión nueva: se recarga sola al volver a la app (iOS la saca del
+  // segundo plano tal cual estaba) si no hay nada a medias: cola vacía, sin
+  // texto escrito, sin hojas abiertas. Si no, queda el aviso para pulsarlo.
+  const busy = Boolean(draft) || menuOpen || receiptOpen;
+  const shownAt = useRef(0);
+  useEffect(() => {
+    const reload = () => {
+      if (updateReady && !busy && !outbox.current?.size) location.reload();
+    };
+    // Lo normal: al volver, el refresco trae la versión nueva un instante
+    // después del evento, así que se recarga si acaba de volver.
+    if (Date.now() - shownAt.current < 5000) reload();
+    const onVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      shownAt.current = Date.now();
+      reload();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [updateReady, busy]);
 
   /* ---------- acciones ---------- */
 
@@ -1346,6 +1373,19 @@ export default function ListView({ initial }: { initial: Snapshot }) {
             ⋯
           </button>
         </div>
+
+        {updateReady && (
+          <p className="mt-2 flex items-center gap-2 rounded-lg bg-surface-2 px-3 py-1.5 text-xs">
+            <span className="flex-1">✨ {t("update.ready")}</span>
+            <button
+              type="button"
+              className="font-bold text-accent"
+              onClick={() => location.reload()}
+            >
+              {t("update.reload")}
+            </button>
+          </p>
+        )}
 
         {(offline || pendingOps > 0) && (
           <p

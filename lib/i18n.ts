@@ -176,6 +176,8 @@ const es = {
   "frequent.forgetConfirm": "¿Dejar de sugerir «{name}»?",
   "suggest.aria": "Comprado otras veces",
 
+  "update.ready": "Hay una versión nueva de la app.",
+  "update.reload": "Actualizar",
   "sync.offline": "Sin conexión. Puedes seguir usando la lista: los cambios se mandan al volver.",
   "sync.pending": "{n} cambios por enviar",
   "sync.sending": "Enviando {n} cambios…",
@@ -408,6 +410,8 @@ const ja: Record<Key, string> = {
   "frequent.forgetConfirm": "「{name}」を候補から外しますか？",
   "suggest.aria": "前に買ったもの",
 
+  "update.ready": "アプリの新しいバージョンがあります。",
+  "update.reload": "更新",
   "sync.offline": "オフラインです。このまま使えます。変更は接続が戻ったら送信されます。",
   "sync.pending": "未送信の変更：{n}件",
   "sync.sending": "{n}件の変更を送信中…",

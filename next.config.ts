@@ -6,6 +6,10 @@ const nextConfig: NextConfig = {
   // existe el endpoint /_next/image, que ha tenido fallos graves (SSRF, RCE
   // con SVG). Menos superficie expuesta.
   images: { unoptimized: true },
+  // Versión de este build (el commit en CI). El cliente la compara con la del
+  // servidor para saber que hay una versión nueva: las PWA de iOS vuelven del
+  // segundo plano sin recargar y se quedarían con el código viejo.
+  env: { NEXT_PUBLIC_BUILD_ID: process.env.GITHUB_SHA?.slice(0, 7) ?? "dev" },
 };
 
 export default nextConfig;

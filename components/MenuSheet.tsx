@@ -174,6 +174,9 @@ export default function MenuSheet({
         >
           {t("settings.logout", { name: me.userName })}
         </button>
+        <p className="text-center text-xs text-muted" data-testid="version">
+          v {process.env.NEXT_PUBLIC_BUILD_ID ?? "dev"}
+        </p>
       </section>
     </Sheet>
   );

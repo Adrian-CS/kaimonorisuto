@@ -78,4 +78,6 @@ export type Snapshot = {
   priceStats?: Record<string, PriceStats>;
   /** Cuándo se generó en el servidor (para compararlo con la copia local). */
   servedAt?: number;
+  /** Versión del servidor que lo ha servido. */
+  build?: string;
 };
