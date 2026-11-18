@@ -5,6 +5,7 @@ import { getDb, now } from "@/lib/db";
 import { nameKey } from "@/lib/money";
 import { deletePhotoIfUnused } from "@/lib/photos";
 import {
+  addStoreFromReceipt,
   ensureCategory,
   ownPhotoKey,
   recordPrice,
@@ -137,6 +138,8 @@ export const PATCH = handler(async (req: Request, ctx: Ctx) => {
       );
       // Un ticket atrasado no pisa el precio que se sugiere la próxima vez.
       if (newest) await rememberPrice(me.householdId, row.name, store, price);
+      // Comprado en esa tienda: queda como una de las suyas.
+      if (fromReceipt) await addStoreFromReceipt(me.householdId, id, row.name, fromReceipt);
     }
   }
 

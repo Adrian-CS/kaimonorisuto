@@ -819,7 +819,12 @@ export default function ListView({ initial }: { initial: Snapshot }) {
         // Si un artículo recibe varias líneas («肉» ← 豚こま y もも), se queda
         // con la última; el historial guarda todas.
         const last = changes.filter((x) => x.itemId === i.id).at(-1);
-        return last ? { ...i, price: last.price, updated_at: Date.now() } : i;
+        if (!last) return i;
+        // La tienda del ticket se suma a las del artículo (también lo hace el
+        // servidor); la principal no cambia.
+        const store_ids =
+          storeId && !i.store_ids.includes(storeId) ? [...i.store_ids, storeId] : i.store_ids;
+        return { ...i, price: last.price, store_ids, updated_at: Date.now() };
       }),
     );
     const receipt = {

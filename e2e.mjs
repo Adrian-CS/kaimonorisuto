@@ -1235,6 +1235,11 @@ async function run(browser, lang, s) {
     if (!dated) throw new Error("falta la etiqueta del ticket");
     if (new Date(dated.at).toISOString().slice(0, 10) !== day)
       throw new Error(`fecha: ${new Date(dated.at).toISOString()} (ticket ${day})`);
+    // Comprado en esa tienda: queda entre las del artículo y su producto.
+    const papel = snap.items.find((x) => x.name === "Papel Albal");
+    if (!papel.store_ids.includes(dated.store_id)) throw new Error(`tiendas: ${papel.store_ids}`);
+    if (!snap.products.find((x) => x.name === "Papel Albal")?.store_ids.includes(dated.store_id))
+      throw new Error("el producto no tiene la tienda del ticket");
     // El mismo ticket otra vez no duplica.
     const papelId = snap.items.find((x) => x.name === "Papel Albal").id;
     await page.request.patch(`${BASE}/api/items/${papelId}`, {

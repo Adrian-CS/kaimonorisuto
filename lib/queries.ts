@@ -188,6 +188,36 @@ export async function rememberPrice(
     .run();
 }
 
+/**
+ * Lo comprado en una tienda (según un ticket) está disponible en ella: se suma
+ * a las tiendas del artículo y de su producto de «lo de siempre», al final
+ * (la principal no cambia). Si ya la tenían, no hace nada.
+ */
+export async function addStoreFromReceipt(
+  householdId: string,
+  itemId: string,
+  name: string,
+  storeId: string,
+) {
+  const db = await getDb();
+  const missing = (table: string) =>
+    `NOT EXISTS (SELECT 1 FROM json_each(${table}.store_ids) WHERE value = ?)`;
+  await db.batch([
+    db
+      .prepare(
+        `UPDATE items SET store_ids = json_insert(store_ids, '$[#]', ?)
+         WHERE id = ? AND household_id = ? AND ${missing("items")}`,
+      )
+      .bind(storeId, itemId, householdId, storeId),
+    db
+      .prepare(
+        `UPDATE products SET store_ids = json_insert(store_ids, '$[#]', ?)
+         WHERE household_id = ? AND name_key = ? AND ${missing("products")}`,
+      )
+      .bind(storeId, householdId, nameKey(name), storeId),
+  ]);
+}
+
 /** Cuántas compras recientes cuentan para la mediana. */
 const STATS_WINDOW = 10;
 /** Corregir un precio enseguida no cuenta como otra compra. */
