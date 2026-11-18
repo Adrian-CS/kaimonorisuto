@@ -44,6 +44,8 @@ const S = {
     copyList: "Copiar mi lista",
     copied: "Lista copiada",
     receiptItem: (n) => `Artículo para ${n}`,
+    receiptAddNew: "+ Añadir a la lista (ya comprado)",
+    receiptSearch: "Buscar en la lista…",
     review: "Repaso",
     reviewDone: "Listo",
     reviewToggle: (n) => `${n}: hace falta`,
@@ -119,6 +121,8 @@ const S = {
     copyList: "リストをコピー",
     copied: "コピーしました",
     receiptItem: (n) => `${n}の商品`,
+    receiptAddNew: "＋ リストに追加（購入済み）",
+    receiptSearch: "リストから検索…",
     review: "見直し",
     reviewDone: "完了",
     reviewToggle: (n) => `${n}：必要`,
@@ -1216,7 +1220,8 @@ async function run(browser, lang, s) {
       [`🧾 ${s.storeB} ${day}`, "Papel Albal 30m 500", "Galletas María 150"].join("\n"),
     );
     await page.getByRole("button", { name: s.receiptReview }).click();
-    await page.getByLabel(s.receiptItem("Galletas María")).selectOption("__nuevo__");
+    await page.getByLabel(s.receiptItem("Galletas María")).click();
+    await page.getByRole("option", { name: s.receiptAddNew }).click();
     await page.getByRole("button", { name: s.receiptSave }).click();
     await page.waitForTimeout(1500);
 
@@ -1273,12 +1278,17 @@ async function run(browser, lang, s) {
       await page.getByRole("button", { name: s.receiptReview }).click();
       return page.getByLabel(s.receiptItem("Crema cacao"));
     };
-    // Primera vez: no se parece a nada, se asocia a mano con Nutella.
-    let select = await paste(400);
+    // Primera vez: no se parece a nada, se busca «nute» y se asocia a Nutella.
+    let pickBtn = await paste(400);
     await page.waitForTimeout(500); // que lleguen las asociaciones
-    if ((await select.inputValue()) !== "") throw new Error("ya venía asociada");
-    const label = (await select.locator("option").allTextContents()).find((x) => x.startsWith("→ Nutella"));
-    await select.selectOption({ label });
+    if ((await pickBtn.textContent()).includes("→")) throw new Error("ya venía asociada");
+    await pickBtn.click();
+    await page.getByPlaceholder(s.receiptSearch).fill("nute");
+    const opts = page.getByRole("option");
+    if ((await opts.allTextContents()).some((x) => x.startsWith("→") && !x.includes("Nutella")))
+      throw new Error("el buscador no filtra");
+    await opts.filter({ hasText: "→ Nutella" }).first().click();
+    if (!(await pickBtn.textContent()).includes("→ Nutella")) throw new Error("no se ha elegido");
     await page.getByRole("button", { name: s.receiptSave }).click();
     await page.waitForTimeout(1200);
     const { aliases } = await (await page.request.get(`${BASE}/api/receipt-aliases`)).json();
@@ -1286,10 +1296,10 @@ async function run(browser, lang, s) {
     if (a?.kind !== "item" || a.target !== "Nutella") throw new Error(JSON.stringify(aliases));
 
     // Segunda vez: ya sale con Nutella.
-    select = await paste(420);
+    pickBtn = await paste(420);
     await page.waitForFunction(
-      (sel) => document.querySelector(sel)?.selectedOptions[0]?.textContent?.startsWith("→ Nutella"),
-      `select[aria-label="${s.receiptItem("Crema cacao")}"]`,
+      (label) => document.querySelector(`button[aria-label="${label}"]`)?.textContent?.includes("→ Nutella"),
+      s.receiptItem("Crema cacao"),
     );
     await page.getByRole("button", { name: s.receiptSave }).click();
     await page.waitForTimeout(1200);
